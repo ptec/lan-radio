@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Local Frequency · LAN Radio</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}"></head>
+<body><div class="shell">
+<aside class="sidebar" aria-label="Stations and settings">
+<header class="brand"><span class="brand-mark" aria-hidden="true">〰</span><div><strong>Local Frequency</strong><small>YOUR NETWORK. YOUR RADIO.</small></div></header>
+<div class="side-heading"><h2>Stations</h2><span id="station-count">0</span></div>
+<nav id="stations" aria-label="Choose a station"><p>Loading stations…</p></nav>
+<div class="side-bottom"><details class="new-station"><summary>＋ Request a station</summary><form id="station"><label>Station name<input name="name" required maxlength="91" placeholder="Give it a name"></label><button type="submit">Send request</button></form></details>
+<section class="sync-panel" aria-label="Catalog synchronization"><div class="sync-heading"><span>Catalog sync</span><button id="sync" class="quiet" type="button">Sync now</button></div><p id="sync-state" role="status"></p><details><summary>Sync details</summary><p id="health"></p><details id="sync-history" hidden><summary>Recent failures</summary><ul id="sync-errors"></ul></details></details><p id="sync-message" role="status"></p></section></div>
+</aside>
+<main><header class="main-heading"><div><p class="eyebrow">ON THE DIAL</p><h1 id="station-title">Find your frequency.</h1><p id="station-description">Choose a station to explore its music.</p></div><span id="station-badge" class="badge">LAN RADIO</span></header>
+<section class="on-air" aria-label="Selected station playback"><div class="current-track"><p class="eyebrow"><span class="live-dot"></span> NOW PLAYING</p><h2 id="now-title">Nothing tuned in yet</h2><p id="now-artist">The next great song is just a station away.</p><button id="tune" type="button" disabled>Tune in</button></div><div class="next-track"><p class="eyebrow">UP NEXT <span aria-hidden="true">↗</span></p><h3 id="next-title">Waiting for a station</h3><p id="next-artist">Approved music from the shuffled station queue.</p></div></section>
+<section class="receiver" aria-label="Audio player"><div><span class="eyebrow">YOUR RECEIVER</span><p id="listening">Not listening</p></div><audio id="audio" controls preload="none"></audio><button id="live" class="quiet" type="button" disabled>Reconnect to live</button><p id="player-message" role="status"></p></section>
+<section class="library" aria-labelledby="library-title"><div class="library-heading"><div><h2 id="library-title">Station collection</h2><p id="collection-summary">All the music in one place.</p></div><button id="request-toggle" class="secondary" type="button" aria-expanded="false" aria-controls="request-panel" disabled>＋ Request a song</button></div>
+<div id="request-panel" hidden><form id="song"><input type="hidden" name="station_id"><label>Song title<input name="title" required maxlength="200" placeholder="What would you like to hear?"></label><label>Artist<input name="artist" required maxlength="200" placeholder="Artist or band"></label><button type="submit">Send request</button></form><p class="hint">Requests need approval in Sheets. Check the collection below before adding a song.</p></div>
+<p id="message" role="status" aria-live="polite"></p>
+<div class="filters"><label class="search-label"><span class="sr-only">Search title or artist</span><input id="song-search" type="search" placeholder="Search songs or artists…"></label><label><span class="sr-only">Song status</span><select id="song-filter"><option value="all">All songs</option><option value="approved">Approved</option><option value="pending">Pending</option><option value="rejected">Rejected</option></select></label></div>
+<p id="collection-message" role="status"></p><div class="table-scroll"><table><thead><tr><th scope="col" class="number">#</th><th scope="col">SONG</th><th scope="col">ARTIST</th><th scope="col">STATUS</th></tr></thead><tbody id="song-rows"></tbody></table></div></section>
+<footer>Live together, wherever you are on the network. Playback includes a short startup buffer.</footer></main></div>
+<script src="{{ url_for('static', filename='app.js') }}" defer></script></body></html>

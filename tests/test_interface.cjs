@@ -1,11 +1,12 @@
 // DOM-level interaction checks; no browser, network, or audio device required.
 const fs=require('fs'),path=require('path'),vm=require('vm'),assert=require('assert');
 class Element {
-  constructor(){this.children=[];this.value='';this.textContent='';this.hidden=false;this.attrs={};}
+  constructor(){this.children=[];this.value='';this.textContent='';this.hidden=false;this.attrs={};this.dataset={};}
   append(...children){for(const child of children){child.parent=this;this.children.push(child);}}
   replaceChildren(...children){this.children=[];this.append(...children);}
   remove(){if(this.parent)this.parent.children=this.parent.children.filter(c=>c!==this);}
   setAttribute(name,value){this.attrs[name]=value;}
+  closest(selector){return selector==='.station-tune' && this.className==='station-tune' ? this : null;}
   addEventListener(name,handler){this['on'+name]=handler;}
   focus(){this.focused=true;}
   querySelector(selector){return get('#song '+selector);}
@@ -18,20 +19,21 @@ const stations=[{id:'a',name:'Jazz',status:'approved',ready:2,approved:2,now_pla
  {id:'b',name:'Rock',status:'approved',ready:1,approved:1,now_playing:{title:'Rock song',artist:'Band'},up_next:{title:'Another song',artist:'Band'}}];
 const songs=[{title:'So What',artist:'Miles Davis',status:'approved',cached:true},{title:'Pending song',artist:'Artist',status:'pending'}, {title:'Rejected song',artist:'Artist',status:'rejected'}];
 const context={document:{querySelector:get,createElement:()=>new Element()},console,Date,encodeURIComponent,setInterval:()=>0,
+ Option:(label,value)=>{const option=new Element();option.textContent=label;option.value=value;return option;},
  fetch:async(url,options)=>{
    requests.push({url,options});
    const body=url==='/api/stations'?{stations}:url==='/api/health'?{sync:{configured:true},pending_requests:0}:url==='/api/sync'?{message:'Sync queued'}:{songs};
    return {ok:true,json:async()=>body};
  }};
 vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../radio/static/app.js'),'utf8'),context);
-const settle=()=>new Promise(resolve=>setImmediate(resolve));
+const settle=()=>new Promise(resolve=>setTimeout(resolve,20));
 (async()=>{
  await settle();
  assert.equal(get('#station-title').textContent,'Jazz');
  assert.equal(get('#next-title').textContent,'Take Five');
  assert.equal(get('#song-rows').children.length,3);
  assert.equal(played,0,'Opening page must not autoplay');
- get('#stations').children[1].children[0].onclick();await settle();
+ get('#stations').children[1].onclick({target:get('#stations').children[1]});await settle();
  assert.equal(get('#station-title').textContent,'Rock');assert.equal(played,0,'Browsing must not change audio');
  assert.equal(get('#song input[name="station_id"]').value,'b');
  get('#request-toggle').onclick();assert.equal(get('#request-panel').hidden,false);

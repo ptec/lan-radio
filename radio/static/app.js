@@ -67,11 +67,24 @@ function renderStations() {
     let card = cards.get(s.id);
     if (!card) {
       card = document.createElement('section');
+      card.tabIndex = 0;
+      card.setAttribute('role', 'button');
+      card.addEventListener('click', event => {
+        // Tune in remains an explicit action; every other part of the card
+        // selects it for browsing.
+        if (!event.target.closest('.station-tune')) selectStation(card.dataset.stationId);
+      });
+      card.addEventListener('keydown', event => {
+        if ((event.key === 'Enter' || event.key === ' ') && event.target === card) {
+          event.preventDefault(); selectStation(card.dataset.stationId);
+        }
+      });
       const select = document.createElement('button'); select.className = 'station-select'; select.onclick = () => selectStation(s.id);
       const info = document.createElement('p');
       const play = document.createElement('button'); play.className = 'station-tune'; play.textContent = 'Tune in'; play.onclick = () => tune(s.id);
       card.append(select, info, play); cards.set(s.id, card); $('#stations').append(card);
     }
+    card.dataset.stationId = s.id;
     card.className = 'station-card' + (s.id === selected ? ' active' : '');
     card.children[0].textContent = s.name; card.children[0].setAttribute('aria-pressed', String(s.id === selected));
     card.children[1].textContent = s.now_playing ? `${s.now_playing.title} · ${s.now_playing.artist}` : s.status === 'pending' ? 'Awaiting approval' : 'Waiting for music';
@@ -90,7 +103,27 @@ function renderSongs() {
     const cell=document.createElement('td'), badge=document.createElement('span');
     badge.className = 'song-status ' + (song.status === 'approved' ? 'approved' : song.status === 'rejected' ? 'rejected' : 'pending');
     badge.textContent = song.queued ? 'Waiting to sync' : song.status === 'pending' ? 'Pending approval' : song.status === 'rejected' ? 'Rejected' : song.status === 'approved' ? song.cached ? 'Approved' : 'Preparing audio' : song.status;
-    cell.append(badge); row.append(cell); return row;
+    if (song.status === 'approved' && !song.cached) {
+      badge.textContent = song.download_status === 'failed' ? 'Download failed' : song.download_status === 'downloading' ? 'Downloading audio' : 'Queued for download';
+      if (song.download_status === 'failed') badge.className = 'song-status rejected';
+    }
+    cell.append(badge);
+    if (song.can_retry) {
+      const retry = document.createElement('button'), stationId = selected;
+      retry.type = 'button'; retry.className = 'quiet download-retry'; retry.textContent = 'Retry download';
+      retry.setAttribute('aria-label', 'Retry download of ' + song.title + ' by ' + song.artist);
+      retry.onclick = async () => {
+        retry.disabled = true;
+        try {
+          const result = await api('/api/stations/' + encodeURIComponent(stationId) + '/songs/' + encodeURIComponent(song.id) + '/retry',
+            {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+          if (selected === stationId) $('#message').textContent = result.message;
+        } catch (error) { if (selected === stationId) $('#message').textContent = error.message; }
+        finally { retry.disabled = false; if (selected === stationId) await loadSongs(); }
+      };
+      cell.append(retry);
+    }
+    row.append(cell); return row;
   }));
   const approved = songs.filter(s => s.status === 'approved').length, pending = songs.filter(s => s.status === 'pending').length;
   $('#collection-summary').textContent = `${songs.length} songs · ${approved} approved · ${pending} pending`;

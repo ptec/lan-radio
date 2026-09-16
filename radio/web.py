@@ -5,6 +5,9 @@ import time
 from collections import defaultdict, deque
 from urllib.parse import urlsplit
 from flask import Flask, Response, jsonify, render_template, request
+import requests
+from .search import SongSearch
+from .store import media_key
 
 
 # Cached MP3s are normalized to 128 kbps. Accumulate complete frames for
@@ -40,6 +43,20 @@ def create_app(store, broadcasts, sync, stop, max_listeners=24):
     slots = threading.BoundedSemaphore(max_listeners)
     rate_lock = threading.Lock()
     requests_by_ip = defaultdict(deque)
+    song_search = SongSearch()
+
+    @app.get('/api/song-suggestions')
+    def song_suggestions():
+        title = request.args.get('title', '').strip()
+        artist = request.args.get('artist', '').strip()
+        if len(title) > 200 or len(artist) > 200:
+            return jsonify(error='Maximum 200 characters per field'), 400
+        if len(title + artist) < 2:
+            return jsonify(songs=[], source='iTunes')
+        try:
+            return jsonify(songs=song_search.search(title, artist), source='iTunes')
+        except (requests.RequestException, ValueError):
+            return jsonify(error='Suggestions unavailable. You can still enter the title and artist manually.'), 503
 
     @app.get('/')
     def index():
@@ -65,8 +82,12 @@ def create_app(store, broadcasts, sync, stop, max_listeners=24):
         station = next((s for s in catalog['stations'] if s['id'] == station_id and s['status'].lower() in ('approved', 'pending')), None)
         if not station:
             return jsonify(error='Station not found'), 404
-        songs = [dict(title=s['title'], artist=s['artist'], status=s['status'].lower(),
-                      queued=False, cached=store.path(s).is_file())
+        states = store.media_states()
+        songs = [dict(id=s['id'], title=s['title'], artist=s['artist'], status=s['status'].lower(),
+                      queued=False, cached=store.path(s).is_file(),
+                      download_status='ready' if store.path(s).is_file() else states.get(media_key(s), 'queued'),
+                      can_retry=station['status'].lower() == 'approved' and s['status'].lower() == 'approved'
+                                and not store.path(s).is_file() and states.get(media_key(s)) == 'failed')
                  for s in catalog['songs'] if s['station_id'] == station_id]
         known = {(s['title'].casefold().strip(), s['artist'].casefold().strip()) for s in songs}
         for item in store.pending(limit=1000):
@@ -77,6 +98,20 @@ def create_app(store, broadcasts, sync, stop, max_listeners=24):
                 songs.append(dict(title=item['title'], artist=item['artist'], status='pending', queued=True, cached=False))
                 known.add(key)
         return jsonify(station=station, songs=songs)
+
+    @app.post('/api/stations/<station_id>/songs/<song_id>/retry')
+    def retry_download(station_id, song_id):
+        if not request.is_json:
+            return jsonify(error='JSON required'), 415
+        origin = request.headers.get('Origin')
+        if origin and urlsplit(origin).netloc != request.host:
+            return jsonify(error='Cross-origin requests are not allowed'), 403
+        song = next((s for s in store.approved(station_id) if s['id'] == song_id), None)
+        if not song:
+            return jsonify(error='Approved song not found'), 404
+        if store.path(song).is_file() or not store.retry_download(media_key(song)):
+            return jsonify(error='This song is already ready, queued, or downloading.'), 409
+        return jsonify(message='Download queued for retry.'), 202
 
     @app.post('/api/sync')
     def manual_sync():

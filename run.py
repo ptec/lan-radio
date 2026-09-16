@@ -34,6 +34,7 @@ def main():
                      request_delay=max(5, int(os.getenv('REQUEST_SYNC_DELAY_SECONDS', '300'))),
                      manual_cooldown=max(1, int(os.getenv('MANUAL_SYNC_COOLDOWN_SECONDS', '30'))))
     sync_thread = threading.Thread(target=sync.run, args=(stop,), daemon=True)
+    # Let the worker validate DOWNLOAD_WORKERS and choose its CPU-based default.
     process = context.Process(target=worker, args=(str(store.root), ffmpeg, worker_stop), name='audio-downloads')
     listeners = max(1, int(os.getenv('MAX_LISTENERS', '24')))
     try:

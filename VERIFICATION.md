@@ -1,5 +1,9 @@
 # Verification
 
+## Parallel, fair download startup
+
+The download worker now derives a bounded default pool from CPU count, supports `DOWNLOAD_WORKERS`, and queues uncached approved songs round-robin by station. Tests verify fairness, cached/unapproved filtering, stable station order, and worker-count overrides. The full Python suite passes after this change.
+
 ## Shuffled station rotation
 
 All 36 Python tests passed. Shuffle tests exercise complete cycles and non-repeating boundaries over 30 random seeds for 2-, 3-, and 10-song libraries, repeated previews, additions/removals/reordering, duplicate recordings, and empty/single-song stations. The station-level up-next test verifies that only cached, approved songs enter the same queue used for playback.

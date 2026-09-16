@@ -1,9 +1,11 @@
 import logging
+import os
 import re
 import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from .store import Store, media_key
 
@@ -40,23 +42,81 @@ def download(song, store, ffmpeg):
         output.replace(store.path(song))  # same filesystem: readers see only complete files
 
 
-def worker(directory, ffmpeg, stop):
+def download_workers():
+    """Choose a conservative default while allowing deployment tuning."""
+    configured = os.getenv('DOWNLOAD_WORKERS', '').strip()
+    if configured:
+        try:
+            return max(1, min(32, int(configured)))
+        except ValueError:
+            LOG.warning('Invalid DOWNLOAD_WORKERS=%r; using CPU-based default', configured)
+    # yt-dlp is network-heavy, while FFmpeg uses CPU. Leave one CPU for Flask
+    # and OS work, and cap the default so a large server does not overwhelm LAN.
+    return max(1, min(8, (os.cpu_count() or 2) - 1))
+
+
+def pending_downloads(store):
+    """Return approved, uncached songs in station round-robin order."""
+    catalog = store.snapshot()
+    station_ids = [s['id'] for s in catalog['stations'] if s['status'].lower() == 'approved']
+    by_station = {station_id: [] for station_id in station_ids}
+    seen = set()
+    # Catalog order is retained within each station. Alternating station rows
+    # means a large playlist cannot keep newly approved songs elsewhere waiting.
+    for song in catalog['songs']:
+        if song['station_id'] not in by_station or song['status'].lower() != 'approved':
+            continue
+        key = media_key(song)
+        if key in seen or store.path(song).is_file() or not store.retry_due(key):
+            continue
+        seen.add(key)
+        by_station[song['station_id']].append(song)
+    queue = []
+    while True:
+        added = False
+        for station_id in station_ids:
+            if by_station[station_id]:
+                queue.append(by_station[station_id].pop(0))
+                added = True
+        if not added:
+            return queue
+
+
+def _download_one(song, store, ffmpeg, stop):
+    if stop.is_set():
+        return
+    key = media_key(song)
+    # The catalog may be edited while a queue is running. Do not start work for
+    # a song that is no longer approved or has already been cached by a sibling.
+    if stop.is_set() or store.path(song).is_file() or not any(media_key(current) == key for current in store.approved()):
+        return
+    store.media_state(key, 'downloading')
+    try:
+        download(song, store, ffmpeg)
+        store.media_state(key, 'ready')
+    except Exception as exc:
+        LOG.warning('Download failed for %s: %s', song['title'], exc)
+        store.media_state(key, 'failed', str(exc), time.time() + 3600)
+
+
+def worker(directory, ffmpeg, stop, max_workers=None):
     logging.basicConfig(level=logging.INFO)
     store = Store(directory)
+    workers = max_workers if max_workers is not None else download_workers()
+    LOG.info('Audio download worker using %d concurrent job(s)', workers)
     while not stop.is_set():
-        for song in store.approved():
-            if stop.is_set():
-                return
-            key = media_key(song)
-            if not any(media_key(current) == key for current in store.approved()):
-                continue  # the catalog may have changed during the last download
-            if store.path(song).is_file() or not store.retry_due(key):
-                continue
-            store.media_state(key, 'downloading')
-            try:
-                download(song, store, ffmpeg)
-                store.media_state(key, 'ready')
-            except Exception as exc:
-                LOG.warning('Download failed for %s: %s', song['title'], exc)
-                store.media_state(key, 'failed', str(exc), time.time() + 3600)
-        stop.wait(5)
+        queue = pending_downloads(store)
+        if not queue:
+            stop.wait(5)
+            continue
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix='audio-download') as pool:
+            futures = [pool.submit(_download_one, song, store, ffmpeg, stop) for song in queue]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    LOG.exception('Unexpected download worker error')
+                if stop.is_set():
+                    for pending in futures:
+                        pending.cancel()
+                    return

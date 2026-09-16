@@ -12,6 +12,7 @@ from radio.audio import Station, Broadcasts, frames, FRAME_SECONDS
 from radio.sync import SheetSync
 from radio.web import create_app
 from radio.catalog import normalize_catalog
+from radio.download import pending_downloads, download_workers
 
 
 class RadioTests(unittest.TestCase):
@@ -61,6 +62,30 @@ class RadioTests(unittest.TestCase):
         other = dict(self.song, id='other', station_id='other')
         self.assertEqual(media_key(self.song), media_key(other))
         self.assertNotEqual(media_key(self.song), media_key(dict(other,youtube_id='abcdefghijk')))
+
+    def test_download_queue_is_round_robin_and_skips_cached_or_unapproved(self):
+        stations = [dict(id='station1', name='A', status='approved'), dict(id='station2', name='B', status='approved')]
+        songs = []
+        for station_id in ('station1', 'station2'):
+            for number in range(3):
+                songs.append(dict(id=f'{station_id}-{number}', station_id=station_id,
+                                  title=f'{station_id} {number}', artist='Artist', status='approved', youtube_id=''))
+        songs.append(dict(id='pending', station_id='station1', title='Pending', artist='Artist', status='pending', youtube_id=''))
+        self.store.replace(dict(stations=stations, songs=songs))
+        self.store.path(songs[1]).write_bytes(b'cached')
+        queued = pending_downloads(self.store)
+        self.assertEqual([s['station_id'] for s in queued], ['station1','station2','station1','station2','station2'])
+        self.assertNotIn('station1-1', [s['id'] for s in queued])
+
+    def test_download_worker_count_is_cpu_based_and_configurable(self):
+        with patch.dict('os.environ', {}, clear=True):
+            with patch('radio.download.os.cpu_count', return_value=12):
+                self.assertEqual(download_workers(), 8)
+        with patch.dict('os.environ', {'DOWNLOAD_WORKERS':'3'}):
+            self.assertEqual(download_workers(), 3)
+        with patch.dict('os.environ', {'DOWNLOAD_WORKERS':'bad'}):
+            with patch('radio.download.os.cpu_count', return_value=2):
+                self.assertEqual(download_workers(), 1)
 
     def test_frames_and_late_join_receive_same_live_chunks(self):
         self.tone()

@@ -102,6 +102,17 @@ class Store:
             row = db.execute('SELECT retry FROM media WHERE key=?', (key,)).fetchone()
         return not row or row[0] <= time.time()
 
+    def media_states(self):
+        with self.connect() as db:
+            return dict(db.execute('SELECT key, state FROM media'))
+
+    def retry_download(self, key):
+        # Only a failed recording can be requeued. Concurrent clicks cannot
+        # reset a running job or enqueue the same recording twice.
+        with self.connect() as db:
+            return db.execute("UPDATE media SET state='queued', error='', retry=0 WHERE key=? AND state='failed'",
+                              (key,)).rowcount == 1
+
     def diagnostics(self):
         with self.connect() as db:
             return {'pending_requests': db.execute('SELECT count(*) FROM outbox').fetchone()[0],

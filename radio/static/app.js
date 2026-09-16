@@ -11,19 +11,26 @@ async function api(url, options) {
 function selectedStation() { return stations.find(s => s.id === selected); }
 function renderMain() {
   const s = selectedStation();
-  $('#station-title').textContent = s?.name || 'Find your frequency.';
-  $('#station-description').textContent = s ? s.status === 'pending' ? 'This station is awaiting approval.' : `${s.ready} songs ready to play. A shared, continuous broadcast.` : 'Choose a station from the sidebar, or request a new one.';
-  $('#station-badge').textContent = s?.status === 'pending' ? 'PENDING' : s ? 'LIVE STATION' : 'LAN RADIO';
+  $('#station-title').textContent = s?.name || 'Choose a station';
+  $('#station-description').textContent = s ? s.status === 'pending' ? 'This station is awaiting approval.' : `${s.ready} songs available` : 'Choose a station from the list.';
+  $('#station-badge').textContent = s?.status === 'pending' ? 'Pending' : s ? 'Live radio' : 'Staff Radio';
   $('#now-title').textContent = s?.now_playing?.title || 'Waiting for music';
-  $('#now-artist').textContent = s?.now_playing?.artist || 'Approved, cached songs will appear here.';
+  $('#now-artist').textContent = s?.now_playing?.artist || '';
   $('#next-title').textContent = s?.up_next?.title || 'Nothing queued yet';
-  $('#next-artist').textContent = s?.up_next?.artist || 'The next approved, cached song appears here.';
+  $('#next-artist').textContent = s?.up_next?.artist || '';
   $('#tune').disabled = !s?.now_playing || s.status !== 'approved';
-  $('#tune').textContent = tuned === selected && tuned ? 'Rejoin live' : 'Tune in';
+  $('#tune').textContent = tuned === selected && tuned && !paused ? 'Listening' : 'Listen';
+  if (tuned === selected && tuned && !paused) $('#tune').disabled = true;
   $('#request-toggle').disabled = !s || s.status !== 'approved';
   $('#song input[name="station_id"]').value = selected || '';
   $('#song button').disabled = !s || s.status !== 'approved';
   $('#listening').textContent = tuned ? stations.find(s => s.id === tuned)?.name || 'Station no longer available' : 'Not listening';
+  const playing = stations.find(station => station.id === tuned)?.now_playing;
+  $('#playing-song').textContent = playing ? `${playing.title} · ${playing.artist}` : 'Choose a station';
+  $('#play-stop').setAttribute('data-playing', String(!!tuned && !paused));
+  $('#listening-label').textContent = connecting ? 'Connecting to:' : paused ? 'Stopped:' : 'Listening to:';
+  $('#play-stop').textContent = tuned && !paused ? 'Stop' : 'Play';
+  $('#play-stop').disabled = !(tuned && !paused) && !stations.some(station => station.id === (tuned || selected) && station.now_playing);
   $('#live').disabled = !stations.some(s => s.id === tuned && s.now_playing);
 }
 function selectStation(id) {
@@ -36,23 +43,31 @@ function selectStation(id) {
   $('#collection-message').textContent = 'Loading songs…';
   loadSongs();
 }
-function tune(id) {
-  selectStation(id);
+function tune(id, browse = true) {
+  if (browse) selectStation(id);
   tuned = id; paused = false; connecting = true;
   const version = ++tuneVersion;
   $('#player-message').textContent = 'Buffering about two seconds of live audio…';
   $('#audio').src = '/stream/' + encodeURIComponent(id) + '?t=' + Date.now();
   $('#audio').play().catch(() => {
-    if (version === tuneVersion) $('#player-message').textContent = 'Press play to listen, or reconnect when the station is ready.';
-  }).finally(() => { if (version === tuneVersion) connecting = false; });
-  renderMain();
+    if (version === tuneVersion) { paused = true; $('#player-message').textContent = 'Press Play to try again.'; }
+  }).finally(() => { if (version === tuneVersion) { connecting = false; renderMain(); renderStations(); } });
+  renderMain(); renderStations();
 }
 $('#tune').onclick = () => { if (selected) tune(selected); };
-$('#live').onclick = () => { if (tuned) tune(tuned); };
-$('#audio').addEventListener('pause', () => { if (!connecting) paused = true; });
-$('#audio').addEventListener('play', () => { if (paused && tuned) tune(tuned); });
+$('#live').onclick = () => { if (tuned) tune(tuned, false); };
+$('#play-stop').onclick = () => {
+  if (tuned && !paused) {
+    ++tuneVersion; connecting = false; paused = true;
+    $('#audio').pause(); $('#audio').removeAttribute('src'); $('#audio').load();
+    $('#player-message').textContent = '';
+    renderMain(); renderStations();
+  } else if (tuned || selected) tune(tuned || selected, false);
+};
+$('#audio').addEventListener('pause', () => { if (!connecting) { paused = true; renderMain(); renderStations(); } });
+$('#audio').addEventListener('play', () => { if (paused && tuned) tune(tuned, false); });
 $('#audio').addEventListener('playing', () => { $('#player-message').textContent = ''; });
-$('#audio').addEventListener('error', () => { $('#player-message').textContent = 'Stream disconnected. Try Reconnect to live.'; });
+$('#audio').addEventListener('error', () => { paused = true; connecting = false; renderMain(); renderStations(); $('#player-message').textContent = 'Connection lost. Press Reconnect to try again.'; });
 
 function renderStations() {
   $('#station-count').textContent = stations.length;
@@ -68,7 +83,8 @@ function renderStations() {
     if (!card) {
       card = document.createElement('section');
       card.tabIndex = 0;
-      card.setAttribute('role', 'button');
+      card.setAttribute('role', 'group');
+      card.setAttribute('aria-label', s.name);
       card.addEventListener('click', event => {
         // Tune in remains an explicit action; every other part of the card
         // selects it for browsing.
@@ -81,7 +97,7 @@ function renderStations() {
       });
       const select = document.createElement('button'); select.className = 'station-select'; select.onclick = () => selectStation(s.id);
       const info = document.createElement('p');
-      const play = document.createElement('button'); play.className = 'station-tune'; play.textContent = 'Tune in'; play.onclick = () => tune(s.id);
+      const play = document.createElement('button'); play.className = 'station-tune'; play.onclick = () => tune(s.id);
       card.append(select, info, play); cards.set(s.id, card); $('#stations').append(card);
     }
     card.dataset.stationId = s.id;
@@ -89,7 +105,10 @@ function renderStations() {
     card.children[0].textContent = s.name; card.children[0].setAttribute('aria-pressed', String(s.id === selected));
     card.children[1].textContent = s.now_playing ? `${s.now_playing.title} · ${s.now_playing.artist}` : s.status === 'pending' ? 'Awaiting approval' : 'Waiting for music';
     card.children[2].disabled = !s.now_playing || s.status !== 'approved';
-    card.children[2].setAttribute('aria-label', 'Tune in to ' + s.name);
+    const listening = tuned === s.id && !paused;
+    card.children[2].textContent = listening ? 'Listening' : 'Listen';
+    if (listening) card.children[2].disabled = true;
+    card.children[2].setAttribute('aria-label', (listening ? 'Listening to ' : 'Listen to ') + s.name);
   }
 }
 function renderSongs() {

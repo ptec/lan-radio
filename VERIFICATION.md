@@ -1,5 +1,13 @@
 # Verification
 
+## Plain-language listening interface
+
+Player control checks also pass for the mobile station drawer opening, closing on selection, moving back to the sidebar at desktop widths, volume adjustment, mute, and unmuting from zero volume. Playback messages are positioned outside the layout to avoid shifting the player or song view. Visual browser verification remains outstanding.
+
+The interface interaction checks pass for Play/Stop, releasing the stream when stopped, resuming the listening station while browsing another, reconnecting without changing the browsed station, and recovering the Play button after a stream error. Existing station browsing, filtering, requests, tuning, and sync checks pass. Song suggestion checks also pass. The user guide matches the new Listen and Reconnect labels.
+
+Desktop/mobile visual rendering and physical audio playback have not been verified for this interface update.
+
 ## Parallel, fair download startup
 
 The download worker now derives a bounded default pool from CPU count, supports `DOWNLOAD_WORKERS`, and queues uncached approved songs round-robin by station. Tests verify fairness, cached/unapproved filtering, stable station order, and worker-count overrides. The full Python suite passes after this change.

@@ -6,6 +6,7 @@ class Element {
   replaceChildren(...children){this.children=[];this.append(...children);}
   remove(){if(this.parent)this.parent.children=this.parent.children.filter(c=>c!==this);}
   setAttribute(name,value){this.attrs[name]=value;}
+  removeAttribute(name){delete this.attrs[name];if(name==='src')this.src='';}
   closest(selector){return selector==='.station-tune' && this.className==='station-tune' ? this : null;}
   addEventListener(name,handler){this['on'+name]=handler;}
   focus(){this.focused=true;}
@@ -14,6 +15,7 @@ class Element {
 const nodes=new Map(),get=selector=>{if(!nodes.has(selector))nodes.set(selector,new Element());return nodes.get(selector);};
 let played=0,requests=[];
 get('#audio').play=()=>{played++;return Promise.resolve();};
+get('#audio').pause=()=>{};get('#audio').load=()=>{};
 get('#song-filter').value='all';
 const stations=[{id:'a',name:'Jazz',status:'approved',ready:2,approved:2,now_playing:{title:'So What',artist:'Miles Davis'},up_next:{title:'Take Five',artist:'Dave Brubeck'}},
  {id:'b',name:'Rock',status:'approved',ready:1,approved:1,now_playing:{title:'Rock song',artist:'Band'},up_next:{title:'Another song',artist:'Band'}}];
@@ -42,6 +44,14 @@ const settle=()=>new Promise(resolve=>setTimeout(resolve,20));
  get('#song-search').value='';get('#song-filter').value='rejected';get('#song-filter').onchange();assert.equal(get('#song-rows').children.length,1);
  get('#tune').onclick();await settle();assert.equal(played,1);assert(get('#audio').src.startsWith('/stream/b?'));
  get('#stations').children[0].children[0].onclick();await settle();assert.equal(get('#listening').textContent,'Rock');assert.equal(played,1);
+ assert.equal(get('#play-stop').textContent,'Stop');
+ get('#play-stop').onclick();assert.equal(get('#audio').src,'','Stop releases the stream');
+ assert.equal(get('#play-stop').textContent,'Play');assert.equal(get('#listening-label').textContent,'Stopped:');
+ get('#play-stop').onclick();await settle();assert.equal(played,2);assert(get('#audio').src.startsWith('/stream/b?'));
+ assert.equal(get('#station-title').textContent,'Jazz','Resuming must preserve the station being browsed');
+ get('#live').onclick();await settle();assert.equal(get('#station-title').textContent,'Jazz');
+ get('#audio').onerror();assert.equal(get('#play-stop').textContent,'Play');
+ get('#play-stop').onclick();await settle();assert.equal(get('#play-stop').textContent,'Stop');
  await get('#sync').onclick();assert.equal(get('#sync-message').textContent,'Sync queued');assert(requests.some(r=>r.url==='/api/sync'&&r.options.method==='POST'));
  console.log('Interface checks passed: initial selection, up next, all statuses, independent browsing/listening, request target, search/filter, tuning, sync.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

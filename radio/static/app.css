@@ -63,3 +63,97 @@ footer{color:#7f8a9c}
 #song-suggestions span{color:#a7b2c2;font-size:.85rem;margin-top:3px}
 #suggestion-status:empty{display:none}
 @media(max-width:1000px){#song{grid-template-columns:minmax(0,1fr)}#song>button{grid-column:1}}
+
+/* Staff radio: readable controls and a persistent listening bar. */
+:root{font-size:17px;color:#f1f3f5;background:#17191d;--muted:#bcc3cc;--line:#49505a;--accent:#94bdff;--lime:#94bdff}
+body{background:#17191d;height:100vh;height:100dvh;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}
+button,input,select,summary{min-height:44px}
+button{border-radius:5px}
+button.quiet,.station-card .station-tune{font-size:1rem;padding:10px 14px}
+button:disabled{opacity:.65}
+.receiver{position:relative;z-index:40;margin:0;padding:14px 24px;gap:14px;justify-content:center;background:#23272e;border-bottom:2px solid #697587}
+.receiver .listening-summary{min-width:180px;flex:0 1 240px}
+.listening-summary span{display:block;font-size:.9rem;color:#c7cdd6}
+.listening-summary strong{display:block;font-size:1.25rem;overflow-wrap:anywhere}
+#play-stop{min-width:110px;min-height:50px;font-size:1.15rem}
+.receiver audio{flex:0 1 300px;height:44px;min-width:180px}
+.receiver #player-message{font-size:.95rem;text-align:center}
+.shell{grid-template-columns:300px minmax(0,1fr);min-height:0;overflow:hidden;align-items:stretch}
+.sidebar{position:relative;top:auto;height:100%;min-height:0;background:#1e2126;padding:24px 16px;overflow-y:auto;overscroll-behavior:contain}
+.brand{padding:0 10px 20px}.brand strong{font-size:1.4rem;letter-spacing:0}
+.side-heading h2,.side-heading>span{font-size:1rem;text-transform:none;letter-spacing:0}
+.station-card{border:1px solid #4c535e;border-radius:5px;background:#252930;padding:14px}
+.station-card.active{background:#2c3747;border:2px solid var(--accent);padding:13px}
+.station-select{font-size:1.15rem;min-height:36px}
+.station-card p{font-size:.95rem;color:#c7cdd6}
+.station-card .station-tune{background:#343e4d;color:#f1f3f5;border-color:#8495ad;width:100%}
+.station-card .station-tune:disabled{opacity:1;background:#252930;color:#c7cdd6}
+summary{font-size:1rem;padding:8px 0}
+.settings{padding:0 10px}.sync-panel{font-size:.9rem;padding:12px 0}.sync-panel summary{font-size:.9rem}
+main{margin:0;padding:28px clamp(20px,3vw,44px);min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+main:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}
+.main-heading{margin-bottom:20px}.main-heading h1{font-size:2rem;letter-spacing:0}
+.main-heading p:last-child,.library-heading p{font-size:1rem}
+.eyebrow{font-size:1rem;letter-spacing:0;color:#c7cdd6;margin-bottom:10px}
+.badge{font-size:.85rem;letter-spacing:0;border-radius:5px}
+.on-air{background:#23272e;border-color:#566170;border-radius:5px}
+.on-air h2{font-size:1.65rem;letter-spacing:0}.next-track h3{font-size:1.2rem}
+.next-track p:not(.eyebrow){font-size:1rem}.on-air p:not(.eyebrow){color:#c7cdd6}
+.library{margin-top:30px}.library h2{font-size:1.35rem;letter-spacing:0}
+label,.hint,#collection-message,#message{font-size:.95rem}
+input::placeholder{color:#b6becb}
+table{font-size:1rem}th{font-size:.9rem;letter-spacing:0;color:#c7cdd6;font-weight:650}
+td:nth-child(3){color:#c7cdd6}.number{font-size:.85rem;color:#b6becb}
+.song-status{font-size:.85rem;white-space:normal;display:inline-block}
+.download-retry{font-size:.9rem}.song-fields label{font-size:.9rem}
+footer{font-size:.9rem;color:#bcc3cc}
+@media(max-width:1000px){.shell{grid-template-columns:260px minmax(0,1fr)}.receiver{padding:12px 18px}.receiver audio{flex-basis:220px}}
+@media(max-width:680px){
+ .shell{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,2fr) minmax(0,3fr)}.sidebar{height:100%;min-height:0;padding:16px}
+ .sidebar #stations{flex:none;max-height:none;min-height:0;overflow:visible}
+ .receiver{gap:8px;padding:10px 14px}.receiver .listening-summary{min-width:0;flex:0 1 180px}
+ .listening-summary strong{font-size:1.1rem}.receiver audio{order:2;flex:0 1 220px;min-width:0;width:160px}
+ .receiver #live{order:2;margin:0}.receiver #player-message{order:3}
+ #play-stop{min-width:90px}.main-heading{flex-wrap:wrap}main{padding:24px 16px}
+ .filters{flex-wrap:wrap}.filters .search-label{flex-basis:100%}.filters select{font-size:1rem}
+ .current-track{padding:20px}.badge{margin:0}.side-bottom{max-height:none}
+ th,td{padding:12px 8px}.number{display:none}
+}
+
+/* A single playback control group, with track information and volume. */
+.receiver{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:12px 24px;padding:12px 24px;border-bottom:1px solid #49505a}
+.receiver .listening-summary{min-width:0;max-width:100%}
+.listening-summary .station-line{display:block;font-size:.85rem;color:#bcc3cc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.listening-summary .station-line span{display:inline;font-size:inherit}
+.listening-summary strong{font-size:1rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}
+.transport{display:flex;align-items:center;justify-content:center;gap:12px}
+#play-stop{display:flex;align-items:center;justify-content:center;gap:9px;min-width:104px;min-height:46px;border-radius:24px;background:#f1f3f5;color:#17191d;font-size:1rem}
+#play-stop::before{content:'';width:0;height:0;border-top:7px solid transparent;border-bottom:7px solid transparent;border-left:11px solid currentColor}
+#play-stop[data-playing="true"]::before{width:12px;height:12px;border:0;background:currentColor;border-radius:1px}
+.receiver #live{font-size:.85rem;border:0;color:#c7cdd6;padding:8px}
+.volume-controls{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
+.volume-controls #mute{border:0;font-size:.85rem;padding:8px}
+#volume{width:110px;min-width:0;padding:0;margin:0;accent-color:var(--accent);background:transparent;border:0;cursor:pointer}
+.receiver #audio{display:none}
+.receiver #player-message{position:absolute;top:100%;left:0;right:0;width:auto;padding:10px 24px;font-size:.85rem;background:#23272e;border-bottom:1px solid #49505a;box-shadow:0 5px 12px #0003}
+#stations-open{display:none}
+#station-drawer{padding:16px;border:0;border-right:1px solid #566170;background:#1e2126;color:#f1f3f5;margin:0;width:min(360px,90vw);max-width:90vw;height:100dvh;max-height:100dvh;overflow:hidden}
+#station-drawer[open]{display:flex;flex-direction:column}
+#station-drawer::backdrop{background:#0009}
+#stations-close{align-self:flex-end;flex-shrink:0;margin-bottom:12px}
+#station-drawer .sidebar{flex:1;min-height:0;height:auto;padding:0;border:0;overflow-y:auto}
+#station-drawer #stations{flex:none;max-height:none;overflow:visible}
+#station-drawer .side-bottom{max-height:none;overflow:visible;flex-shrink:0}
+@media(max-width:680px){
+ .shell{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+ .receiver{grid-template-columns:auto minmax(0,1fr) auto;gap:8px 12px;padding:10px 12px}
+ #stations-open{display:block;font-size:.85rem;padding:8px}
+ .receiver .listening-summary{min-width:0;grid-column:2;grid-row:1}
+ .transport{grid-column:3;grid-row:1}.transport #live{display:none}
+ #play-stop{min-width:76px;min-height:44px;padding:8px 10px;font-size:.9rem}
+ .volume-controls{display:none}
+ .receiver:has(#player-message:not(:empty)) .transport #live{display:block;position:absolute;top:calc(100% + 6px);right:12px;z-index:1;margin:0}
+ .receiver #player-message{text-align:left;min-height:56px;padding:10px 110px 10px 12px}
+ main{scrollbar-gutter:auto}
+ .table-scroll{overflow:visible}table{table-layout:fixed}th:last-child{width:32%}
+}

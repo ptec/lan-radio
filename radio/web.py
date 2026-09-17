@@ -39,11 +39,13 @@ def buffered_audio(listener, stop):
 
 def create_app(store, broadcasts, sync, stop, max_listeners=24):
     app = Flask(__name__)
-    app.config['MAX_CONTENT_LENGTH'] = 8192
+    app.config['MAX_CONTENT_LENGTH'] = 262144
     slots = threading.BoundedSemaphore(max_listeners)
     rate_lock = threading.Lock()
     requests_by_ip = defaultdict(deque)
     song_search = SongSearch()
+    from .testing import register_testing
+    register_testing(app, store, broadcasts, sync, song_search, stop)
 
     @app.get('/api/song-suggestions')
     def song_suggestions():

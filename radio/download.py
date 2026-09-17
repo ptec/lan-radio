@@ -13,6 +13,7 @@ LOG = logging.getLogger(__name__)
 
 
 def download(song, store, ffmpeg):
+    generation = store.cache_generation()
     video = song.get('youtube_id', '').strip()
     if video and not re.fullmatch(r'[A-Za-z0-9_-]{11}', video):
         raise ValueError('youtube_id must be an 11-character YouTube video ID')
@@ -39,7 +40,7 @@ def download(song, store, ffmpeg):
         from .audio import frames
         if sum(1 for _ in frames(output)) == 0:
             raise ValueError('Empty audio file')
-        output.replace(store.path(song))  # same filesystem: readers see only complete files
+        store.publish_audio(song, output, generation)
 
 
 def download_workers():
@@ -47,7 +48,9 @@ def download_workers():
     configured = os.getenv('DOWNLOAD_WORKERS', '').strip()
     if configured:
         try:
-            return max(1, min(32, int(configured)))
+            count = int(configured)
+            if count != 0:
+                return max(1, min(32, count))
         except ValueError:
             LOG.warning('Invalid DOWNLOAD_WORKERS=%r; using CPU-based default', configured)
     # yt-dlp is network-heavy, while FFmpeg uses CPU. Leave one CPU for Flask
@@ -86,17 +89,19 @@ def _download_one(song, store, ffmpeg, stop):
     if stop.is_set():
         return
     key = media_key(song)
+    generation = store.cache_generation()
     # The catalog may be edited while a queue is running. Do not start work for
     # a song that is no longer approved or has already been cached by a sibling.
     if stop.is_set() or store.path(song).is_file() or not any(media_key(current) == key for current in store.approved()):
         return
-    store.media_state(key, 'downloading')
+    store.media_state(key, 'downloading', generation=generation)
     try:
         download(song, store, ffmpeg)
-        store.media_state(key, 'ready')
+        if store.path(song).is_file():
+            store.media_state(key, 'ready', generation=generation)
     except Exception as exc:
         LOG.warning('Download failed for %s: %s', song['title'], exc)
-        store.media_state(key, 'failed', str(exc), time.time() + 3600)
+        store.media_state(key, 'failed', str(exc), time.time() + 3600, generation=generation)
 
 
 def worker(directory, ffmpeg, stop, max_workers=None):

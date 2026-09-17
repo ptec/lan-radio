@@ -1,4 +1,5 @@
 import logging
+import json
 import time
 import threading
 import re
@@ -59,7 +60,7 @@ class SheetSync:
 
     def call(self, **body):
         try:
-            response = requests.post(self.url, json=dict(token=self.token, **body), timeout=45)
+            response = requests.post(self.url, data={'payload': json.dumps(dict(token=self.token, **body))}, timeout=45)
         except requests.exceptions.SSLError:
             raise SyncError('TLS certificate verification failed. Check the system clock and trusted CA certificates, including any corporate proxy CA.') from None
         except requests.exceptions.Timeout:

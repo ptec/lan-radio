@@ -26,6 +26,7 @@ function renderMain() {
   $('#song button').disabled = !s || s.status !== 'approved';
   $('#listening').textContent = tuned ? stations.find(s => s.id === tuned)?.name || 'Station no longer available' : 'Not listening';
   const playing = stations.find(station => station.id === tuned)?.now_playing;
+  document.title = playing && !paused ? `${playing.title} — ${playing.artist} | Staff Radio` : 'Staff Radio';
   $('#playing-song').textContent = playing ? `${playing.title} · ${playing.artist}` : 'Choose a station';
   $('#play-stop').setAttribute('data-playing', String(!!tuned && !paused));
   $('#listening-label').textContent = connecting ? 'Connecting to:' : paused ? 'Stopped:' : 'Listening to:';

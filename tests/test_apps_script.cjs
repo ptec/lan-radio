@@ -8,7 +8,7 @@ class Sheet {
   getLastColumn(){return Math.max(1,...this.rows.map(r=>r.length));}
   getMaxRows(){return 1000;}
   appendRow(row){this.raw.push([...row]);this.rows.push(row.map(v=>String(v).replace(/^'/,'')));return this;}
-  getRange(){return {setDataValidation(){},setFontWeight(){}};}
+  getRange(row,col){return {setDataValidation(){},setFontWeight(){},setValue:value=>{this.rows[row-1][col-1]=String(value).replace(/^'/,'');}};}
   setFrozenRows(){}
   autoResizeColumns(){}
   hideSheet(){this.hidden=true;}
@@ -28,6 +28,28 @@ const token=n=>String(n).padStart(8,'0')+'-1234-1234-1234-123456789abc';
 const submit=(...requests)=>post({action:'submit',requests});
 let passed=0;
 function test(name,body){sheets=[new Sheet('Notes',[['Moderator notes']])];body();assert.equal(locked,false);passed++;console.log('PASS '+name);}
+
+test('Form payload, batch partial outcomes and retry receipts',()=>{
+  const sheet = new Sheet('station:Rock',[HEADERS,['A&B + café','Artist','approved',''],['Other','Artist','approved','']]);sheets.push(sheet);
+  const edit={id:'one',request_token:'a'.repeat(64),station:'Rock',station_status:'approved',original:{title:'A&B + café',artist:'Artist',status:'approved',youtube_id:''},changes:{title:'Fixed + %','artist':'Artist',youtube_id:''}};
+  const body={token:'secret',action:'edit_batch',edits:[edit,{...edit,id:'bad',request_token:'b'.repeat(64),original:{...edit.original,title:'Missing'}}]};
+  const send=()=>JSON.parse(context.doPost({parameter:{payload:JSON.stringify(body)}}).text);
+  const first=send();assert.equal(first.results[0].saved,true);assert.equal(first.results[1].saved,false);
+  assert.equal(sheet.rows[1][0],'Fixed + %');assert.equal(send().results[0].saved,true);
+  assert.equal(sheet.rows.length,3);assert.equal(locked,false);
+});
+
+test('Testing edits preserve status and notes and reject stale or duplicate rows',()=>{
+  const sheet=new Sheet('station:Rock',[['Notes',...HEADERS],['keep','Song','Artist','approved','']]);sheets.push(sheet);
+  const original={title:'Song',artist:'Artist',status:'approved',youtube_id:''};
+  const data={action:'edit',station:'Rock',station_status:'approved',original,changes:{title:'=Literal',artist:'New artist',youtube_id:'abcdefghijk'}};
+  assert.equal(post(data).ok,true);
+  assert.deepEqual(sheet.rows[1],['keep','=Literal','New artist','approved','abcdefghijk']);
+  assert.equal(post(data).conflict,true);
+  sheet.rows.push(['other','Song','Artist','approved',''],['duplicate','Song','Artist','approved','']);
+  assert.equal(post(data).conflict,true);
+  sheet.name='station:Renamed';assert.equal(post(data).conflict,true);
+});
 
 test('Authentication and nested station catalog, no spreadsheet IDs',()=>{
   sheets.push(new Sheet('station:Rock',[HEADERS,['Song','Artist','approved','']]),new Sheet('pending:Country',[HEADERS]),new Sheet('metadata:Other',[['ignored']]));

@@ -124,17 +124,75 @@ function json(data) {
   return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
 }
 
+function editSong(ss, data, cache) {
+  const prefix = data.station_status === 'approved' ? 'station:' : data.station_status === 'pending' ? 'pending:' : null;
+  const sheet = prefix && ss.getSheetByName(prefix + field(data, 'station'));
+  const conflict = () => ({ok:true,conflict:true,error:'The spreadsheet row changed, was removed, or is duplicated. Sync and reload before editing.'});
+  if (!sheet) return conflict();
+  const original = data.original, changes = data.changes;
+  if (!original || !changes) throw Error('Missing song edit');
+  const title = field(changes,'title'), artist = field(changes,'artist');
+  const video = changes.youtube_id;
+  if (typeof video !== 'string' || (video && !/^[A-Za-z0-9_-]{11}$/.test(video))) throw Error('Invalid YouTube ID');
+  const snapshot = cache ? (cache[sheet.getName()] || (cache[sheet.getName()] = columns(sheet))) : columns(sheet);
+  const {values,positions} = snapshot;
+  const matches = [];
+  values.slice(1).forEach((row,index) => {
+    const actual = positions.map(i => i < 0 ? '' : String(row[i] || '').trim());
+    actual[2] = actual[2].toLowerCase() || 'pending';
+    if (['title','artist','status','youtube_id'].every((key,i) => actual[i] === original[key])) matches.push(index+2);
+  });
+  if (matches.length !== 1) return conflict();
+  let videoColumn = positions[3];
+  if (videoColumn < 0) {
+    videoColumn = sheet.getLastColumn();
+    sheet.getRange(1, videoColumn+1).setValue('YouTube ID');
+    positions[3] = videoColumn;
+  }
+  // Literal cell values prevent formulas; unrelated columns and status stay intact.
+  [[positions[0],title],[positions[1],artist],[videoColumn,video]].forEach(([col,value]) =>
+    sheet.getRange(matches[0],col+1).setValue("'" + value));
+  [[positions[0],title],[positions[1],artist],[videoColumn,video]].forEach(([col,value]) => values[matches[0]-1][col] = value);
+  if (!cache) SpreadsheetApp.flush();
+  return {ok:true};
+}
+
 function doGet() { return json({ok:false,error:'Use authenticated POST'}); }
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
   try {
-    const data = JSON.parse(e.postData.contents);
+    // Apps Script decodes form parameters once; do not decode JSON again.
+    const data = JSON.parse(e.parameter && e.parameter.payload !== undefined ? e.parameter.payload : e.postData.contents);
     const props = PropertiesService.getScriptProperties(), token=props.getProperty('SHEETS_TOKEN');
     if (!token || data.token!==token) return json({ok:false,error:'Unauthorized'});
     lock.waitLock(25000);
     const ss = SpreadsheetApp.openById(props.getProperty('SPREADSHEET_ID'));
     if (data.action==='catalog') return json(catalog(ss));
+    if (data.action==='edit') return json(editSong(ss,data));
+    if (data.action==='edit_batch') {
+      if (!Array.isArray(data.edits) || !data.edits.length || data.edits.length > 50) throw Error('Expected 1 to 50 edits');
+      const cache = {}, results = [];
+      const receipts = receiptSheet(ss);
+      const seen = new Map(receipts.getDataRange().getDisplayValues().slice(1).map(r=>[r[0],r[1]]));
+      for (const edit of data.edits) {
+        try {
+          if (!edit || typeof edit.request_token !== 'string' || !/^[0-9a-f]{64}$/.test(edit.request_token)) throw Error('Invalid edit token');
+          let result;
+          if (seen.get(edit.request_token) === 'edited') result = {ok:true};
+          else {
+            result = editSong(ss, edit, cache);
+            if (!result.conflict) {
+              receipts.appendRow([edit.request_token,'edited',new Date().toISOString()]);
+              seen.set(edit.request_token,'edited');
+            }
+          }
+          results.push({id:edit.id,saved:!result.conflict,error:result.error || null});
+        } catch(err) { results.push({id:edit && edit.id,saved:false,error:String(err.message)}); }
+      }
+      SpreadsheetApp.flush();
+      return json({ok:true,results});
+    }
     if (data.action!=='submit' || !Array.isArray(data.requests) || data.requests.length>100) throw Error('Invalid request');
     const receipts = receiptSheet(ss);
     // Delivery tokens are not pointers to rows/tabs. Retain after deletion.

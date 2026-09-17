@@ -21,7 +21,23 @@ Open `http://localhost:8080` on the server, or `http://SERVER_LAN_IP:8080` on ot
 
 YouTube extraction may require a supported JavaScript runtime such as Deno, depending on upstream requirements. See the [yt-dlp installation documentation](https://github.com/yt-dlp/yt-dlp#installation). Keep yt-dlp current with `python -m pip install -U "yt-dlp[default]"`. Use content you have permission to download and broadcast.
 
-## Google Sheet setup
+## Testing and correcting recordings
+
+Under **Cache maintenance**, **Delete unused audio** removes managed MP3 files not referenced by any current local catalog song (including pending/rejected rows). Sync first to incorporate spreadsheet changes. **Clear all cached audio** removes managed MP3s and resets download state so approved songs rebuild through the download queue. Both show counts and require confirmation. Files currently locked by playback may be skipped and reported for retry. Active temporary download directories are left to workers; downloads that started before a full reset cannot publish stale results. Catalog data, requests, and metadata-review results are preserved.
+
+Debug saves are sent in batches of up to 50 edits, followed by one catalog refresh. Each row receives its own success/error result; failed rows stay unsaved. Apps Script caches station reads within each batch and records successful delivery tokens for retries. Deploy the current `Code.gs` **before restarting the updated service**: all service-to-Sheets calls now use a form-encoded POST field named `payload` containing JSON. The updated script still accepts legacy JSON POST bodies, so older services can keep running during the script update. The token stays in the POST body, not the URL. This does not make the Apps Script response generally CORS-accessible; browsers continue to call Flask.
+
+The debug page also offers an advisory **iTunes metadata review**. Start **Scan new / failed checks** or **Rescan all songs** to run a paced background scan (about one unique title/artist pair every five seconds). Exact means case-sensitive title and artist equality against up to 20 search results. Missing results and spelling/capitalization differences appear under **Needs metadata review**; connection or provider failures appear separately under **iTunes search failed**. Approval and playback are never changed. Results are saved locally and reused across stations; saved title/artist edits require a new scan. The scan continues if you close the page, but stops when the service shuts down; scan new checks to resume afterward. Filters and counts use the current catalog. iTunes may lack a valid song, so flags are suggestions for human review, not evidence that audio is wrong.
+
+Set a separate `TESTING_PASSWORD` in `.env` and restart, then open `/debug` (for example, `http://radio.local/debug`). Sign in using that password; no username is needed. Sign-in lasts eight hours or until the service restarts. There is no homepage link. Password sign-in over HTTP is suitable only for a trusted LAN; use HTTPS on untrusted networks.
+
+The page shows service uptime since app startup, cache size, download counts, queued requests, and last sync. Filter by station, search, and preview the actual cached MP3 with seeking without interrupting the broadcast. **Next cached song** steps through the filtered list. Previewing does not automatically identify recordings or approve songs. Refresh the catalog to update statistics and download states.
+
+Deploy the updated `google-apps-script/Code.gs` web app before using **Save to spreadsheet**. Edits immediately update Title, Artist, and YouTube ID in the matching station tab and pull the catalog back. Approval is preserved. Changed recordings use a new cache key and approved songs join the normal download queue. Old cached files are retained, including audio used by other stations. Blank YouTube ID uses search; an 11-character ID selects a specific video. Automatic-search results from earlier downloads do not have a recorded source video ID.
+
+Edits match the original row contents rather than row numbers or spreadsheet IDs. Changed, deleted, or duplicate rows require resolving the conflict in Sheets and syncing again. If saving succeeds but refreshing fails, use Sync now; do not assume the save failed. Google Sheets UI edits made at the exact same moment cannot be locked by Apps Script, so avoid editing the same row in both interfaces simultaneously.
+
+## Google Sheet setup (deployment)
 
 The station collection shows audio download progress separately from moderation status. Failed downloads show **Download failed** with a **Retry download** button for approved songs. Retry adds the recording back to the normal download queue, bypassing the automatic one-hour retry delay; it waits for the download worker's current batch to finish. Cached audio is shared across stations, so one retry also covers matching recordings on other stations.
 

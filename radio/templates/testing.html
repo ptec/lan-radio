@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Radio debug</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='debug.css') }}"></head><body>
+<div class="debug-dock">
+<section class="preview" aria-label="Preview player"><div class="preview-track"><strong id="preview-name">Select a song to preview</strong></div>
+<button id="preview-toggle" type="button" disabled>Play</button>
+<div class="seek-controls"><span id="preview-time">0:00</span><label class="sr-only" for="preview-seek">Seek in preview</label><input id="preview-seek" type="range" min="0" max="0" step="0.1" value="0" disabled><span id="preview-duration">0:00</span></div>
+<div class="preview-volume"><button id="preview-mute" type="button" aria-pressed="false">Mute</button><label class="sr-only" for="preview-volume">Preview volume</label><input id="preview-volume" type="range" min="0" max="1" step="0.01" value="1"></div>
+<audio id="preview" preload="none"></audio></section></div>
+
+<div id="stats" role="status">Loading statistics...</div><p id="stats-updated" class="note" role="status"></p><p id="sync-detail" class="note"></p>
+<details class="cache-tools"><summary>Cache maintenance</summary><p>Unused means no song in the current local catalog references the file, including pending or rejected songs. Sync with Sheets first if you recently changed the spreadsheet.</p><button id="cache-unused">Delete unused audio</button> <button id="cache-all">Clear all cached audio</button><p>Clearing all audio resets download failures and rebuilds approved songs. Listening may be interrupted. Files in use may require another cleanup; active download temporary files are left to their workers.</p></details>
+<details class="cache-tools"><summary>iTunes metadata review</summary><p id="review-status" role="status">No scan running.</p><div class="actions"><button id="review-start">Scan new / failed checks</button><button id="review-all">Rescan all songs</button><button id="review-refresh">Show scan results</button></div></details>
+<section class="collection" aria-label="Songs"><div class="table-toolbar" role="region" aria-label="Catalog controls"><h2>Catalog controls</h2><div class="actions"><button id="refresh">Reload local catalog</button><button id="sync">Sync with Sheets</button><button id="save-all" disabled>Save &amp; sync all (0)</button></div><p id="message" role="status"></p></div><div class="collection-heading"><span id="result-count"></span></div><div class="filters"><label>Station <select id="station"><option value="">All stations</option></select></label><input id="search" type="search" placeholder="Search title or artist" aria-label="Search songs"><label>Show <select id="filter"><option value="all">All songs</option><option value="review">Needs metadata review</option><option value="review-error">iTunes search failed</option><option value="review-unchecked">Not scanned</option><option value="failed">Failed downloads</option><option value="ready">Cached audio</option></select></label></div>
+
+
+<div class="song-table"><table><thead><tr><th scope="col">Station</th><th scope="col">Title</th><th scope="col">Artist</th><th scope="col">YouTube ID</th><th scope="col">Status</th><th scope="col">Controls</th></tr></thead><tbody id="songs"></tbody></table></div></section>
+<script src="{{ url_for('static', filename='debug-suggestions.js') }}" defer></script><script src="{{ url_for('static', filename='testing.js') }}" defer></script><script src="{{ url_for('static', filename='debug-player.js') }}" defer></script></body></html>

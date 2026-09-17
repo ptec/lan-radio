@@ -78,6 +78,9 @@ class RadioTests(unittest.TestCase):
         self.assertNotIn('station1-1', [s['id'] for s in queued])
 
     def test_download_worker_count_is_cpu_based_and_configurable(self):
+        with patch.dict('os.environ', {'DOWNLOAD_WORKERS':'0'}):
+            with patch('radio.download.os.cpu_count', return_value=8):
+                self.assertEqual(download_workers(), 7)
         with patch.dict('os.environ', {}, clear=True):
             with patch('radio.download.os.cpu_count', return_value=12):
                 self.assertEqual(download_workers(), 8)

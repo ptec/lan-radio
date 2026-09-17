@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -27,6 +28,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS media (key TEXT PRIMARY KEY, state TEXT, error TEXT, retry REAL);
                 CREATE TABLE IF NOT EXISTS rejected_requests (id TEXT PRIMARY KEY, body TEXT, error TEXT);
                 CREATE TABLE IF NOT EXISTS sync_failures (id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at REAL, error TEXT);
+                CREATE TABLE IF NOT EXISTS metadata_reviews (key TEXT PRIMARY KEY, state TEXT, checked_at REAL);
+                CREATE TABLE IF NOT EXISTS cache_control (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL);
+                INSERT OR IGNORE INTO cache_control VALUES (1, 0);
             ''')
 
     @contextmanager
@@ -93,9 +97,61 @@ class Store:
     def path(self, song):
         return self.cache / (media_key(song) + '.mp3')
 
-    def media_state(self, key, state, error='', retry=0):
+    def media_state(self, key, state, error='', retry=0, generation=None):
         with self.connect() as db:
+            if generation is not None:
+                db.execute('BEGIN IMMEDIATE')
+                if generation != db.execute('SELECT generation FROM cache_control WHERE id=1').fetchone()[0]:
+                    return
             db.execute('INSERT OR REPLACE INTO media VALUES (?, ?, ?, ?)', (key, state, error[-1500:], retry))
+
+    def cache_generation(self):
+        with self.connect() as db:
+            return db.execute('SELECT generation FROM cache_control WHERE id=1').fetchone()[0]
+
+    def publish_audio(self, song, output, generation):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if generation != db.execute('SELECT generation FROM cache_control WHERE id=1').fetchone()[0]:
+                return False
+            row = db.execute('SELECT body FROM snapshot WHERE id=1').fetchone()
+            catalog = json.loads(row[0]) if row else {'songs': []}
+            if not any(media_key(s) == media_key(song) for s in catalog['songs']):
+                return False
+            output.replace(self.path(song))
+            db.execute('INSERT OR REPLACE INTO media VALUES (?, ?, ?, ?)', (media_key(song), 'ready', '', 0))
+            return True
+
+    def clean_cache(self, mode, dry_run=False):
+        if mode not in ('unused', 'all'):
+            raise ValueError('Choose unused or all')
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT body FROM snapshot WHERE id=1').fetchone()
+            catalog = json.loads(row[0]) if row else {'songs': []}
+            used = {media_key(s) for s in catalog['songs']}
+            candidates = []
+            root = self.cache.resolve()
+            for path in self.cache.iterdir():
+                if not re.fullmatch(r'[0-9a-f]{64}\.mp3', path.name) or path.is_symlink() or not path.is_file() or path.resolve().parent != root:
+                    continue
+                if mode == 'all' or path.stem not in used:
+                    candidates.append(path)
+            size = sum(p.stat().st_size for p in candidates)
+            if dry_run:
+                return dict(files=len(candidates), bytes=size)
+            deleted, failed = 0, 0
+            if mode == 'all':
+                db.execute('UPDATE cache_control SET generation=generation+1 WHERE id=1')
+                db.execute('DELETE FROM media')
+            for path in candidates:
+                try:
+                    path.unlink()
+                    deleted += 1
+                    db.execute('DELETE FROM media WHERE key=?', (path.stem,))
+                except OSError:
+                    failed += 1
+            return dict(deleted=deleted, failed=failed)
 
     def retry_due(self, key):
         with self.connect() as db:

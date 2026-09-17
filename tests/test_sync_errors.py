@@ -1,4 +1,5 @@
 import tempfile
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -8,6 +9,15 @@ from radio.sync import SheetSync, SyncError
 
 
 class SyncErrorTests(unittest.TestCase):
+    def test_form_encoded_payload(self):
+        response = Mock(ok=True)
+        response.json.return_value = {'ok':True}
+        with patch('radio.sync.requests.post', return_value=response) as post:
+            self.sync.call(action='submit', requests=[{'title':'A&B + 100% café'}])
+        self.assertNotIn('json', post.call_args.kwargs)
+        payload = json.loads(post.call_args.kwargs['data']['payload'])
+        self.assertEqual(payload['requests'][0]['title'], 'A&B + 100% café')
+        self.assertEqual(payload['token'], 'secret-token')
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)

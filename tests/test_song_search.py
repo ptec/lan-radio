@@ -14,7 +14,7 @@ class SongSearchTests(unittest.TestCase):
         get.return_value.json.return_value = {'results': [
             {'trackName': 'Other', 'artistName': 'Other'},
             {'trackName': 'Hello', 'artistName': 'Adele'},
-            {'trackName': 'hello', 'artistName': 'ADELE'},
+            {'trackName': 'Hello', 'artistName': 'Adele'},
             {'trackName': 'No artist'}, None,
         ]}
         search = SongSearch()

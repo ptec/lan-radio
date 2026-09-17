@@ -1,5 +1,9 @@
 # Verification
 
+## Testing page
+
+45 Python tests pass, including password protection, missing previews, byte-range audio seeking, statistics, edit validation, cross-origin rejection, sync-busy handling, and spreadsheet conflict handling. All 10 mocked Apps Script scenarios pass, including edits preserving status and notes, literal text writes, and rejection of stale, renamed, or duplicate matches. The testing JavaScript passes its syntax check. Live spreadsheet editing, browser rendering, and audible preview playback have not been exercised.
+
 ## Plain-language listening interface
 
 Player control checks also pass for the mobile station drawer opening, closing on selection, moving back to the sidebar at desktop widths, volume adjustment, mute, and unmuting from zero volume. Playback messages are positioned outside the layout to avoid shifting the player or song view. Visual browser verification remains outstanding.

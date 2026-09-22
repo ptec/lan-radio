@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Radio debug</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Radio Administration</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='debug.css') }}"></head><body>
 <div class="debug-dock">
 <section class="preview" aria-label="Preview player"><div class="preview-track"><strong id="preview-name">Select a song to preview</strong></div>
@@ -9,10 +9,54 @@
 <audio id="preview" preload="none"></audio></section></div>
 
 <div id="stats" role="status">Loading statistics...</div><p id="stats-updated" class="note" role="status"></p><p id="sync-detail" class="note"></p>
-<details class="cache-tools"><summary>Cache maintenance</summary><p>Unused means no song in the current local catalog references the file, including pending or rejected songs. Sync with Sheets first if you recently changed the spreadsheet.</p><button id="cache-unused">Delete unused audio</button> <button id="cache-all">Clear all cached audio</button><p>Clearing all audio resets download failures and rebuilds approved songs. Listening may be interrupted. Files in use may require another cleanup; active download temporary files are left to their workers.</p></details>
-<details class="cache-tools"><summary>iTunes metadata review</summary><p id="review-status" role="status">No scan running.</p><div class="actions"><button id="review-start">Scan new / failed checks</button><button id="review-all">Rescan all songs</button><button id="review-refresh">Show scan results</button></div></details>
-<section class="collection" aria-label="Songs"><div class="table-toolbar" role="region" aria-label="Catalog controls"><h2>Catalog controls</h2><div class="actions"><button id="refresh">Reload local catalog</button><button id="sync">Sync with Sheets</button><button id="save-all" disabled>Save &amp; sync all (0)</button></div><p id="message" role="status"></p></div><div class="collection-heading"><span id="result-count"></span></div><div class="filters"><label>Station <select id="station"><option value="">All stations</option></select></label><input id="search" type="search" placeholder="Search title or artist" aria-label="Search songs"><label>Show <select id="filter"><option value="all">All songs</option><option value="review">Needs metadata review</option><option value="review-error">iTunes search failed</option><option value="review-unchecked">Not scanned</option><option value="failed">Failed downloads</option><option value="ready">Cached audio</option></select></label></div>
+<details class="cache-tools">
+  <summary>Cache maintenance</summary>
+  <p>The cache holds downloaded audio so songs can play without being downloaded again. Use these tools to reclaim space after catalog changes or rebuild the audio library.</p>
+  <dl class="tool-guide">
+    <dt><button id="cache-unused">Delete unused audio</button></dt>
+    <dd>Removes audio files that no song in the local catalog uses. Files used by approved, pending, or rejected songs are kept. Sync with Sheets first if you have removed or changed songs there.</dd>
+    <dt><button id="cache-all">Clear all cached audio</button></dt>
+    <dd>Deletes all cached recordings and resets download failures. Approved songs on approved stations download again through the normal queue. Use this when you want to rebuild the entire audio library; listening may be interrupted until songs are ready again.</dd>
+  </dl>
+  <p>Both options show the number of files and their size before asking you to confirm deletion. Neither deletes songs, notes, or moderation decisions from the catalog or spreadsheet. Files currently in use may need another cleanup attempt; downloads already in progress are handled by their workers.</p>
+</details>
+<details class="cache-tools">
+  <summary>iTunes metadata review</summary>
+  <p>Checks song titles and artists against iTunes to help find spelling, capitalization, or naming differences. A match requires both fields to match a search result exactly. A missing match is a reason to review the entry, not proof that it is wrong.</p>
+  <dl class="tool-guide">
+    <dt><button id="review-start">Scan unchecked</button></dt>
+    <dd>Checks songs without a saved metadata result and retries failed searches. Previously completed checks are skipped, including songs already flagged for review.</dd>
+    <dt><button id="review-pending">Scan pending songs</button></dt>
+    <dd>Checks only songs awaiting approval that have no metadata result or whose last search failed. Completed checks are skipped.</dd>
+    <dt><button id="review-all">Rescan all songs</button></dt>
+    <dd>Runs a fresh check of every distinct title and artist in the catalog, replacing previous results. This is the slowest option; use it when you deliberately want to refresh everything.</dd>
+    <dt><button id="review-refresh">Show scan results</button></dt>
+    <dd>Clears the station and text search filters and shows songs marked <strong>Needs metadata review</strong>. It does not start a scan. Use the table's Show filter to see failed searches or unscanned songs.</dd>
+  </dl>
+  <p>To correct an entry, click its title or artist and choose an iTunes suggestion, or edit it yourself. Then use <strong>Save &amp; sync</strong>. To check just that song, open <strong>Details / rescan</strong> in its Checks column and choose <strong>Rescan metadata</strong>. Save any edits before scanning.</p>
+  <p>Bulk scans cover all stations regardless of the table filters. Results survive restarts, and identical title/artist pairs share a check. Both iTunes tools update from the same lookup, so you do not need to run both. Only one scan runs at a time; searches are paced to avoid overwhelming iTunes. Scanning does not edit titles, artists, or approval decisions.</p>
+  <p id="review-status" role="status">No scan running.</p>
+</details>
+<details class="cache-tools">
+  <summary>iTunes explicit-content review</summary>
+  <p>Looks up iTunes content ratings to help moderators decide which songs need closer listening. These ratings describe matching catalog entries, not the audio downloaded from YouTube. Scanning never approves or rejects a song.</p>
+  <dl class="tool-guide">
+    <dt><button id="explicit-start">Scan unchecked</button></dt>
+    <dd>Checks songs without a saved explicit-content result and retries failed searches. Completed results, including unknown ratings, are kept.</dd>
+    <dt><button id="explicit-pending">Scan pending songs</button></dt>
+    <dd>Checks only songs awaiting approval that have no explicit-content result or whose last search failed. Completed checks are skipped.</dd>
+    <dt><button id="explicit-all">Rescan all songs</button></dt>
+    <dd>Refreshes the rating for every distinct title and artist in the catalog, including songs checked before. Allow extra time for a large catalog.</dd>
+    <dt><button id="explicit-refresh">Show explicit / ambiguous</button></dt>
+    <dd>Clears the station and text search filters and shows songs marked explicit or with conflicting ratings. It does not start a scan. Use the table's Show filter to find unknown or unchecked ratings.</dd>
+  </dl>
+  <p><strong>Reading the results:</strong> Explicit means a matching entry is marked explicit. Edited version means an edited recording is listed. Not marked explicit means the matching entry carries that rating; it does not verify your downloaded copy. Conflicting versions means matching results disagree. Rating unknown means there is no exact match or usable rating. Search failed means the lookup could not complete; retry it later.</p>
+  <p>Use <strong>Details / rescan</strong> in a song's Checks column to see the returned recordings or choose <strong>Rescan explicit rating</strong>. Preview the audio and use the YouTube ID to select the intended recording before making your moderation decision.</p>
+  <p>Bulk scans cover all stations regardless of the table filters. Both iTunes tools share their lookup and update together. Saved results are reused unless you request a rescan; changing the title or artist requires a check of the new details.</p>
+  <p id="explicit-status" role="status">No scan running.</p>
+</details>
+<section class="collection" aria-label="Songs"><div class="table-toolbar" role="region" aria-label="Catalog controls"><h2>Catalog controls</h2><div class="actions"><button id="refresh">Reload local catalog</button><button id="sync">Sync with Sheets</button><button id="save-all" disabled>Save &amp; sync all (0)</button></div><p id="message" role="status"></p></div><div class="collection-heading"><span id="result-count"></span></div><div class="filters"><label>Station <select id="station"><option value="">All stations</option></select></label><input id="search" type="search" placeholder="Search title or artist" aria-label="Search songs"><label>Show <select id="filter"><option value="all" selected>All songs</option><option value="pending">Pending approval</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="explicit">Explicit / ambiguous</option><option value="explicit-unknown">Explicit rating unknown</option><option value="explicit-unchecked">Explicit rating unchecked</option><option value="cleaned">Edited version indicated</option><option value="notExplicit">Not marked explicit</option><option value="review">Needs metadata review</option><option value="review-error">iTunes search failed</option><option value="review-unchecked">Not scanned</option><option value="failed">Failed downloads</option><option value="ready">Cached audio</option></select></label></div>
 
 
-<div class="song-table"><table><thead><tr><th scope="col">Station</th><th scope="col">Title</th><th scope="col">Artist</th><th scope="col">YouTube ID</th><th scope="col">Status</th><th scope="col">Controls</th></tr></thead><tbody id="songs"></tbody></table></div></section>
+<div class="song-table"><table><thead><tr><th id="sequence-heading" class="sequence-number" scope="col">#</th><th scope="col">Station</th><th scope="col">Title</th><th scope="col">Artist</th><th scope="col">YouTube ID</th><th scope="col">Moderation</th><th scope="col">Checks</th><th scope="col">Controls</th></tr></thead><tbody id="songs"></tbody></table></div></section>
 <script src="{{ url_for('static', filename='debug-suggestions.js') }}" defer></script><script src="{{ url_for('static', filename='testing.js') }}" defer></script><script src="{{ url_for('static', filename='debug-player.js') }}" defer></script></body></html>

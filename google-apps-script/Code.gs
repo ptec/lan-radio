@@ -1,7 +1,7 @@
 /* Moderation tabs: station:Rock (live), pending:Rock (awaiting approval).
  * Each tab is a complete playlist. No row IDs or cross-sheet references.
  * Set SHEETS_TOKEN in Script Properties, run setup, deploy as a Web app. */
-const SONG_HEADERS = ['Title', 'Artist', 'Status', 'YouTube ID'];
+const SONG_HEADERS = ['Title', 'Artist', 'Status', 'YouTube ID', 'Notes'];
 const RECEIPTS = 'metadata:Request receipts';
 const RECEIPT_HEADERS = ['Request token', 'Outcome', 'Received at'];
 
@@ -65,13 +65,13 @@ function catalog(ss) {
     try {
       const {values, positions} = columns(sheet);
       values.slice(1).forEach((row,index) => {
-        const [title,artist,status,video] = positions.map(i => i < 0 ? '' : String(row[i] || '').trim());
+        const [title,artist,status,video,notes] = positions.map(i => i < 0 ? '' : String(row[i] || '').trim());
         if (!title && !artist && !status && !video) return;
         if (!title || !artist) {
           warnings.push(sheet.getName() + ' row ' + (index+2) + ': incomplete song; skipped');
           return;
         }
-        songs.push({title,artist,status:status.toLowerCase() || 'pending',youtube_id:video});
+        songs.push({title,artist,status:status.toLowerCase() || 'pending',youtube_id:video,notes});
       });
     } catch (err) {
       warnings.push(sheet.getName() + ': ' + err.message + '; playlist paused');
@@ -93,7 +93,7 @@ function field(r,key) {
 }
 
 function stationName(value) {
-  if (!value || value.length > 91 || /[\[\]*?:/\\]/.test(value)) throw Error('Station names: 1–91 characters, no [ ] * ? : / or backslash');
+  if (!value || value.length > 91 || /[\[\]*?:/\\]/.test(value)) throw Error('Station names: 1â€“91 characters, no [ ] * ? : / or backslash');
   return value;
 }
 
@@ -133,6 +133,9 @@ function editSong(ss, data, cache) {
   if (!original || !changes) throw Error('Missing song edit');
   const title = field(changes,'title'), artist = field(changes,'artist');
   const video = changes.youtube_id;
+  const status = changes.status === undefined ? original.status : changes.status;
+  if (!['approved','pending','rejected'].includes(status)) throw Error('Invalid moderation status');
+  if (changes.notes !== undefined && (typeof changes.notes !== 'string' || changes.notes.length > 2000)) throw Error('Invalid notes');
   if (typeof video !== 'string' || (video && !/^[A-Za-z0-9_-]{11}$/.test(video))) throw Error('Invalid YouTube ID');
   const snapshot = cache ? (cache[sheet.getName()] || (cache[sheet.getName()] = columns(sheet))) : columns(sheet);
   const {values,positions} = snapshot;
@@ -140,7 +143,7 @@ function editSong(ss, data, cache) {
   values.slice(1).forEach((row,index) => {
     const actual = positions.map(i => i < 0 ? '' : String(row[i] || '').trim());
     actual[2] = actual[2].toLowerCase() || 'pending';
-    if (['title','artist','status','youtube_id'].every((key,i) => actual[i] === original[key])) matches.push(index+2);
+    if (['title','artist','status','youtube_id'].every((key,i) => actual[i] === original[key]) && (original.notes === undefined || actual[4] === original.notes)) matches.push(index+2);
   });
   if (matches.length !== 1) return conflict();
   let videoColumn = positions[3];
@@ -149,12 +152,19 @@ function editSong(ss, data, cache) {
     sheet.getRange(1, videoColumn+1).setValue('YouTube ID');
     positions[3] = videoColumn;
   }
-  // Literal cell values prevent formulas; unrelated columns and status stay intact.
-  [[positions[0],title],[positions[1],artist],[videoColumn,video]].forEach(([col,value]) =>
-    sheet.getRange(matches[0],col+1).setValue("'" + value));
-  [[positions[0],title],[positions[1],artist],[videoColumn,video]].forEach(([col,value]) => values[matches[0]-1][col] = value);
+  const writes = [[positions[0],title],[positions[1],artist],[videoColumn,video],[positions[2],status]];
+  if (changes.notes !== undefined) {
+    if (positions[4] < 0) {
+      positions[4] = sheet.getLastColumn();
+      sheet.getRange(1,positions[4]+1).setValue('Notes');
+    }
+    writes.push([positions[4],changes.notes.trim()]);
+  }
+  // Literal values prevent formulas; unrelated columns are preserved.
+  writes.forEach(([col,value]) => sheet.getRange(matches[0],col+1).setValue("'" + value));
+  writes.forEach(([col,value]) => values[matches[0]-1][col] = value);
   if (!cache) SpreadsheetApp.flush();
-  return {ok:true};
+  return {ok:true,moderation_version:1};
 }
 
 function doGet() { return json({ok:false,error:'Use authenticated POST'}); }
@@ -179,15 +189,15 @@ function doPost(e) {
         try {
           if (!edit || typeof edit.request_token !== 'string' || !/^[0-9a-f]{64}$/.test(edit.request_token)) throw Error('Invalid edit token');
           let result;
-          if (seen.get(edit.request_token) === 'edited') result = {ok:true};
+          if (seen.get(edit.request_token) === 'edited:v1' || (seen.get(edit.request_token) === 'edited' && ['status','notes'].every(f => edit.changes[f] === undefined || edit.changes[f] === (edit.original[f] || '')))) result = {ok:true};
           else {
             result = editSong(ss, edit, cache);
             if (!result.conflict) {
-              receipts.appendRow([edit.request_token,'edited',new Date().toISOString()]);
-              seen.set(edit.request_token,'edited');
+              receipts.appendRow([edit.request_token,'edited:v1',new Date().toISOString()]);
+              seen.set(edit.request_token,'edited:v1');
             }
           }
-          results.push({id:edit.id,saved:!result.conflict,error:result.error || null});
+          results.push({id:edit.id,saved:!result.conflict,moderation_version:1,error:result.error || null});
         } catch(err) { results.push({id:edit && edit.id,saved:false,error:String(err.message)}); }
       }
       SpreadsheetApp.flush();
@@ -239,7 +249,7 @@ function migrateLegacy() {
   for (const plan of planned) {
     const sheet=ss.insertSheet(plan.name);
     formatStation(sheet);
-    for (const song of plan.songs) sheet.appendRow(["'"+song.title,"'"+song.artist,song.status||'pending',"'"+song.youtube_id]);
+    for (const song of plan.songs) sheet.appendRow(["'"+song.title,"'"+song.artist,song.status||'pending',"'"+song.youtube_id,"'"+(song.notes||'')]);
   }
   setup();
 }

@@ -1,4 +1,4 @@
-# Staff Radio
+# LAN Radio
 
 ## http://radio.local
 

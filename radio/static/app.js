@@ -13,7 +13,7 @@ function renderMain() {
   const s = selectedStation();
   $('#station-title').textContent = s?.name || 'Choose a station';
   $('#station-description').textContent = s ? s.status === 'pending' ? 'This station is awaiting approval.' : `${s.ready} songs available` : 'Choose a station from the list.';
-  $('#station-badge').textContent = s?.status === 'pending' ? 'Pending' : s ? 'Live radio' : 'Staff Radio';
+  $('#station-badge').textContent = s?.status === 'pending' ? 'Pending' : s ? 'Live radio' : 'LAN Radio';
   $('#now-title').textContent = s?.now_playing?.title || 'Waiting for music';
   $('#now-artist').textContent = s?.now_playing?.artist || '';
   $('#next-title').textContent = s?.up_next?.title || 'Nothing queued yet';
@@ -26,13 +26,17 @@ function renderMain() {
   $('#song button').disabled = !s || s.status !== 'approved';
   $('#listening').textContent = tuned ? stations.find(s => s.id === tuned)?.name || 'Station no longer available' : 'Not listening';
   const playing = stations.find(station => station.id === tuned)?.now_playing;
-  document.title = playing && !paused ? `${playing.title} — ${playing.artist} | Staff Radio` : 'Staff Radio';
+  document.title = playing && !paused ? `${playing.title} — ${playing.artist} | LAN Radio` : 'LAN Radio';
   $('#playing-song').textContent = playing ? `${playing.title} · ${playing.artist}` : 'Choose a station';
   $('#play-stop').setAttribute('data-playing', String(!!tuned && !paused));
   $('#listening-label').textContent = connecting ? 'Connecting to:' : paused ? 'Stopped:' : 'Listening to:';
   $('#play-stop').textContent = tuned && !paused ? 'Stop' : 'Play';
   $('#play-stop').disabled = !(tuned && !paused) && !stations.some(station => station.id === (tuned || selected) && station.now_playing);
   $('#live').disabled = !stations.some(s => s.id === tuned && s.now_playing);
+  const canView = stations.some(s => s.id === tuned);
+  $('#now-playing-link').setAttribute('aria-disabled', String(!canView));
+  if (canView) $('#now-playing-link').setAttribute('href', '#station-title');
+  else $('#now-playing-link').removeAttribute('href');
 }
 function selectStation(id) {
   if (selected === id) return;
@@ -57,6 +61,12 @@ function tune(id, browse = true) {
 }
 $('#tune').onclick = () => { if (selected) tune(selected); };
 $('#live').onclick = () => { if (tuned) tune(tuned, false); };
+$('#now-playing-link').onclick = event => {
+  event.preventDefault();
+  if (!stations.some(s => s.id === tuned)) return;
+  selectStation(tuned);
+  $('main').scrollTop = 0;
+};
 $('#play-stop').onclick = () => {
   if (tuned && !paused) {
     ++tuneVersion; connecting = false; paused = true;
@@ -113,21 +123,38 @@ function renderStations() {
   }
 }
 function renderSongs() {
+  const digits = Math.max(2, String(songs.length).length);
+  document.querySelector('th.number').setAttribute('style', `width:calc(${digits}ch + 24px)`);
   const search = $('#song-search').value.trim().toLocaleLowerCase(), filter = $('#song-filter').value;
   const visible = songs.map((song,index) => ({song,index})).filter(({song}) => (filter === 'all' || song.status === filter) && `${song.title} ${song.artist}`.toLocaleLowerCase().includes(search));
   $('#song-rows').replaceChildren(...visible.map(({song,index}) => {
     const row = document.createElement('tr');
-    for (const [i, value] of [String(index+1).padStart(2,'0'), song.title, song.artist].entries()) {
+    for (const [i, value] of [String(index+1).padStart(digits,'0'), song.title, song.artist].entries()) {
       const cell = document.createElement('td'); cell.textContent = value; if (!i) cell.className='number'; row.append(cell);
     }
     const cell=document.createElement('td'), badge=document.createElement('span');
     badge.className = 'song-status ' + (song.status === 'approved' ? 'approved' : song.status === 'rejected' ? 'rejected' : 'pending');
-    badge.textContent = song.queued ? 'Waiting to sync' : song.status === 'pending' ? 'Pending approval' : song.status === 'rejected' ? 'Rejected' : song.status === 'approved' ? song.cached ? 'Approved' : 'Preparing audio' : song.status;
+    badge.textContent = song.queued ? 'Waiting to sync' : song.status === 'pending' ? 'Pending approval' : song.status === 'rejected' ? 'Rejected' : song.status === 'approved' ? 'Approved' : song.status;
+    if (song.notes) {
+      const notes = document.createElement('details'); notes.className = 'song-notes';
+      const summary = document.createElement('summary'); summary.setAttribute('aria-label', song.status + '. Moderator notes: ' + song.notes);
+      const icon = document.createElement('span'); icon.textContent = ' \u24d8'; icon.setAttribute('aria-label','Moderator notes');
+      summary.append(badge, icon);
+      const text = document.createElement('p'); text.textContent = song.notes;
+      text.id = 'song-notes-' + index; text.setAttribute('role', 'tooltip');
+      summary.setAttribute('aria-describedby', text.id);
+      notes.onmouseenter = () => { notes.open = true; };
+      notes.onmouseleave = () => { if (!notes.matches(':focus-within')) notes.open = false; };
+      notes.onfocusin = () => { notes.open = true; };
+      notes.onfocusout = event => { if (!notes.contains(event.relatedTarget)) notes.open = false; };
+      notes.onkeydown = event => { if (event.key === 'Escape') { notes.open = false; event.preventDefault(); } };
+      notes.append(summary, text); cell.append(notes);
+    } else cell.append(badge);
     if (song.status === 'approved' && !song.cached) {
-      badge.textContent = song.download_status === 'failed' ? 'Download failed' : song.download_status === 'downloading' ? 'Downloading audio' : 'Queued for download';
-      if (song.download_status === 'failed') badge.className = 'song-status rejected';
+      const audioStatus = document.createElement('span'); audioStatus.className = 'song-audio-status';
+      audioStatus.textContent = song.download_status === 'failed' ? 'Download failed' : song.download_status === 'downloading' ? 'Downloading audio' : 'Queued for download';
+      cell.append(audioStatus);
     }
-    cell.append(badge);
     if (song.can_retry) {
       const retry = document.createElement('button'), stationId = selected;
       retry.type = 'button'; retry.className = 'quiet download-retry'; retry.textContent = 'Retry download';

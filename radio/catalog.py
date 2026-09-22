@@ -22,9 +22,11 @@ def normalize_catalog(data):
         for row in station['songs']:
             if not isinstance(row, dict) or any(not isinstance(row.get(f), str) or not row[f].strip() for f in ('title', 'artist', 'status')):
                 raise ValueError('Invalid song row')
+            if not isinstance(row.get('notes', ''), str):
+                raise ValueError('Invalid moderator notes')
             if not isinstance(row.get('youtube_id', ''), str):
                 raise ValueError('Invalid YouTube ID')
-            song = {f: row.get(f, '').strip() for f in ('title', 'artist', 'status', 'youtube_id')}
+            song = {f: row.get(f, '').strip() for f in ('title', 'artist', 'status', 'youtube_id', 'notes')}
             song['status'] = song['status'].lower()
             # Exact textual edits change identity as well as media selection.
             # Row positions are deliberately not identities: sorting is safe.

@@ -29,3 +29,48 @@ class MetadataReviewTests(unittest.TestCase):
             self.assertEqual(reopened.results()[review_key(song)]['state'],'matched')
             self.assertNotIn(review_key(dict(song,title='HELLO')),reopened.results())
             self.assertEqual(store.snapshot(),catalog)
+
+    def test_explicit_versions_unknown_errors_and_saved_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(directory)
+            song = dict(id='one', station_id='station', title='Song', artist='Artist', status='pending')
+            search = Mock()
+            review = MetadataReview(store, search, threading.Event())
+            for ratings, expected in [(['explicit'], 'explicit'), (['cleaned'], 'cleaned'),
+                                      (['notExplicit'], 'notExplicit'), (['explicit','cleaned'], 'ambiguous'),
+                                      ([], 'unknown'), ([None], 'unknown')]:
+                search.search.return_value = [dict(title='Song',artist='Artist',explicitness=r) for r in ratings]
+                review.check(song)
+                self.assertEqual(review.results()[review_key(song)]['explicit_state'], expected)
+            search.search.side_effect = RuntimeError('offline')
+            review.check(song)
+            self.assertEqual(review.results()[review_key(song)]['explicit_state'], 'error')
+            reopened = MetadataReview(Store(directory), search, threading.Event())
+            self.assertEqual(reopened.results(), review.results())
+
+    def test_scan_scopes_reuse_results_and_deduplicate_stations(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(directory)
+            song = dict(id='one', station_id='station', title='Song', artist='Artist', status='pending')
+            other = dict(song,id='two',title='Other',status='approved')
+            duplicate = dict(song,id='three')
+            store.replace(dict(stations=[dict(id='station',name='Rock',status='approved')],songs=[song,other,duplicate]))
+            search = Mock(); search.search.return_value = [dict(title='Song',artist='Artist',explicitness='explicit')]
+            review = MetadataReview(store,search,threading.Event()); review.check(song)
+            with patch('radio.review.threading.Thread') as worker:
+                self.assertTrue(review.start(scope='pending'))
+                self.assertEqual(worker.call_args.kwargs['args'][0], [])
+                self.assertFalse(review.start(scope='all'))
+                review.progress['running'] = False
+                review.start(scope='unchecked',tool='explicit')
+                self.assertEqual(worker.call_args.kwargs['args'][0],[other])
+                review.progress['running'] = False
+                review.start(scope='all')
+                self.assertEqual(len(worker.call_args.kwargs['args'][0]),2)
+                review.progress['running'] = False
+                review.start(scope='song',song_id='one')
+                self.assertEqual(worker.call_args.kwargs['args'][0],[song])
+                review.progress['running'] = False
+                with self.assertRaises(ValueError): review.start(scope='song',song_id='missing')
+                with self.assertRaises(ValueError): review.start(scope='invalid')

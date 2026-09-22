@@ -52,3 +52,16 @@ class SongSearchTests(unittest.TestCase):
         get.return_value.json.return_value = {'results': [{'trackName': 'Hello', 'artistName': 'Adele'}]}
         response = client.get('/api/song-suggestions?artist=Adele')
         self.assertEqual(response.json['songs'][0]['title'], 'Hello')
+
+
+    @patch('radio.search.requests.get')
+    def test_same_title_versions_keep_distinct_ratings_and_can_rescan(self, get):
+        get.return_value.json.return_value = {'results': [
+            dict(trackName='Song',artistName='Artist',trackExplicitness='explicit',trackId=1),
+            dict(trackName='Song',artistName='Artist',trackExplicitness='cleaned',trackId=2)]}
+        search = SongSearch()
+        result = search.search('Song','Artist')
+        self.assertEqual({s['explicitness'] for s in result},{'explicit','cleaned'})
+        self.assertEqual(get.call_args.kwargs['params']['explicit'],'Yes')
+        search.invalidate('Song','Artist'); search.search('Song','Artist')
+        self.assertEqual(get.call_count,2)

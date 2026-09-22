@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Staff Radio</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}"></head>
+<title>Local Radio</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}"></head>
 <body>
 <section class="receiver" aria-label="Listening controls">
 <button id="stations-open" class="quiet" type="button" aria-haspopup="dialog" aria-controls="station-drawer">Stations</button>
-<div class="listening-summary"><span class="station-line"><span id="listening-label">Listening to:</span> <span id="listening" aria-live="polite">Not listening</span></span><strong id="playing-song">Choose a station</strong></div>
+<a id="now-playing-link" class="listening-summary" aria-disabled="true"><span class="station-line"><span id="listening-label">Listening to:</span> <span id="listening" aria-live="polite">Not listening</span></span><strong id="playing-song">Choose a station</strong></a>
 <div class="transport">
 <button id="play-stop" type="button" disabled>Play</button>
 <button id="live" class="quiet" type="button" disabled>Reconnect</button>
@@ -14,7 +14,7 @@
 <p id="player-message" role="status"></p>
 </section><div class="shell">
 <aside class="sidebar" aria-label="Stations and settings">
-<header class="brand"><strong>Staff Radio</strong></header>
+<header class="brand"><strong>LAN Radio</strong></header>
 <div class="side-heading"><h2>Stations</h2><span id="station-count">0</span></div>
 <nav id="stations" aria-label="Choose a station"><p>Loading stations…</p></nav>
 <div class="side-bottom"><details class="new-station"><summary>Request a station</summary><form id="station"><label>Station name<input name="name" required maxlength="91" placeholder="Give it a name"></label><button type="submit">Send request</button></form></details>

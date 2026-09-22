@@ -16,32 +16,35 @@ class TestingPageTests(unittest.TestCase):
         self.sync = Mock(lock=threading.Lock(), running=False, url='configured', token='secret', last_success=None, error=None)
         with patch.dict('os.environ', {'TESTING_PASSWORD':'test-password'}):
             self.client = create_app(self.store, Mock(), self.sync, threading.Event()).test_client()
+        self.sync.safe_error.side_effect = str
         self.auth = {}
 
     def edit(self, **extra):
-        return self.client.post('/api/debug/edit', headers=self.auth, json=dict(id='song',
+        return self.client.post('/api/admin/edit', headers=self.auth, json=dict(id='song',
             original={k:self.song[k] for k in ('title','artist','status','youtube_id')},
             changes=dict(title='Corrected', artist='Artist', youtube_id='abcdefghijk'), **extra))
 
     def test_auth_and_preview_range(self):
-        self.assertEqual(self.client.get('/debug').status_code, 302)
+        self.assertEqual(self.client.get('/admin').status_code, 302)
         self.assertEqual(self.client.get('/testing').status_code, 404)
-        self.assertNotIn('WWW-Authenticate', self.client.get('/api/debug').headers)
-        self.assertEqual(self.client.post('/debug/login', data={'password':'wrong'}).status_code, 401)
-        self.assertEqual(self.client.get('/api/debug').status_code, 401)
-        self.assertEqual(self.client.get('/api/debug/audio/song').status_code, 401)
-        self.assertEqual(self.client.post('/debug/login', data={'password':'test-password'}).status_code, 302)
-        self.assertEqual(self.client.get('/debug', headers=self.auth).status_code, 200)
-        self.assertEqual(self.client.get('/api/debug/audio/song', headers=self.auth).status_code, 404)
+        self.assertEqual(self.client.get('/debug').status_code, 404)
+        self.assertEqual(self.client.get('/admin').headers['Location'], '/admin/login')
+        self.assertNotIn('WWW-Authenticate', self.client.get('/api/admin').headers)
+        self.assertEqual(self.client.post('/admin/login', data={'password':'wrong'}).status_code, 401)
+        self.assertEqual(self.client.get('/api/admin').status_code, 401)
+        self.assertEqual(self.client.get('/api/admin/audio/song').status_code, 401)
+        self.assertEqual(self.client.post('/admin/login', data={'password':'test-password'}).status_code, 302)
+        self.assertEqual(self.client.get('/admin', headers=self.auth).status_code, 200)
+        self.assertEqual(self.client.get('/api/admin/audio/song', headers=self.auth).status_code, 404)
         self.store.path(self.song).write_bytes(b'0123456789')
-        response = self.client.get('/api/debug/audio/song', headers={**self.auth,'Range':'bytes=2-5'})
+        response = self.client.get('/api/admin/audio/song', headers={**self.auth,'Range':'bytes=2-5'})
         self.assertEqual(response.status_code, 206)
         self.assertEqual(response.data,b'2345')
         response.close()
-        self.assertEqual(self.client.get('/api/debug',headers=self.auth).json['cache_files'], 1)
+        self.assertEqual(self.client.get('/api/admin',headers=self.auth).json['cache_files'], 1)
 
     def test_save_conflicts_and_validation(self):
-        self.client.post('/debug/login', data={'password':'test-password'})
+        self.client.post('/admin/login', data={'password':'test-password'})
         self.sync.call.return_value = {'ok':True}
         self.assertEqual(self.edit().status_code,200)
         self.sync.pull.assert_called_once()
@@ -51,25 +54,49 @@ class TestingPageTests(unittest.TestCase):
         self.sync.running=True
         self.assertEqual(self.edit().status_code,409)
         self.sync.running=False
-        self.assertEqual(self.client.post('/api/debug/edit',headers=self.auth,json={'changes':{}}).status_code,400)
-        self.assertEqual(self.client.post('/api/debug/edit',headers={**self.auth,'Origin':'https://elsewhere'},json={}).status_code,403)
+        self.assertEqual(self.client.post('/api/admin/edit',headers=self.auth,json={'changes':{}}).status_code,400)
+        self.assertEqual(self.client.post('/api/admin/edit',headers={**self.auth,'Origin':'https://elsewhere'},json={}).status_code,403)
 
     def test_deferred_edits_refresh_once(self):
-        self.client.post('/debug/login', data={'password':'test-password'})
+        self.client.post('/admin/login', data={'password':'test-password'})
         self.sync.call.return_value = {'ok': True}
         self.assertEqual(self.edit(defer_refresh=True).status_code, 200)
         self.sync.pull.assert_not_called()
-        self.assertEqual(self.client.post('/api/debug/refresh', json={}).status_code, 200)
+        self.assertEqual(self.client.post('/api/admin/refresh', json={}).status_code, 200)
         self.sync.pull.assert_called_once()
 
     def test_batch_edits_use_one_remote_call_and_report_partial_failure(self):
-        self.client.post('/debug/login', data={'password':'test-password'})
+        self.client.post('/admin/login', data={'password':'test-password'})
         original = {k:self.song[k] for k in ('title','artist','status','youtube_id')}
         edit = dict(id='song',original=original,changes=dict(title='New',artist='Artist',youtube_id=''))
         self.sync.call.return_value = {'results':[{'id':'song','saved':True}]}
-        response = self.client.post('/api/debug/edits',json={'edits':[edit,dict(edit,id='removed')]})
+        response = self.client.post('/api/admin/edits',json={'edits':[edit,dict(edit,id='removed')]})
         self.assertEqual(response.status_code,200)
         self.assertEqual({r['id']:r['saved'] for r in response.json['results']},{'song':True,'removed':False})
         self.sync.call.assert_called_once()
         self.assertEqual(self.sync.call.call_args.kwargs['action'],'edit_batch')
         self.sync.pull.assert_not_called()
+
+    def test_moderation_notes_validation_and_old_script_acknowledgment(self):
+        self.client.post('/admin/login', data={'password':'test-password'})
+        original = {k:self.song[k] for k in ('title','artist','status','youtube_id')}
+        original['notes'] = ''
+        edit = dict(id='song',original=original,changes=dict(title='Song',artist='Artist',youtube_id='',status='rejected',notes='Use a clean version'))
+        self.sync.call.return_value = {'results':[dict(id='song',saved=True,moderation_version=1)]}
+        response = self.client.post('/api/admin/edits',json={'edits':[edit]})
+        self.assertTrue(response.json['results'][0]['saved'])
+        outgoing = self.sync.call.call_args.kwargs['edits'][0]
+        self.assertEqual(outgoing['changes']['status'],'rejected')
+        self.assertEqual(outgoing['changes']['notes'],'Use a clean version')
+        self.sync.call.return_value = {'results':[dict(id='song',saved=True)]}
+        response = self.client.post('/api/admin/edits',json={'edits':[edit]})
+        self.assertFalse(response.json['results'][0]['saved'])
+        edit['changes']['status'] = 'invalid'
+        self.sync.call.reset_mock()
+        self.assertFalse(self.client.post('/api/admin/edits',json={'edits':[edit]}).json['results'][0]['saved'])
+        self.sync.call.assert_not_called()
+        self.song['notes'] = 'Changed in Sheets'
+        self.store.replace(dict(stations=[dict(id='station',name='Rock',status='approved')],songs=[self.song]))
+        edit['changes']['status'] = 'approved'
+        self.assertFalse(self.client.post('/api/admin/edits',json={'edits':[edit]}).json['results'][0]['saved'])
+        self.assertEqual(self.client.get('/api/stations/station/songs').json['songs'][0]['notes'],'Changed in Sheets')

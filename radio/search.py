@@ -13,6 +13,10 @@ class SongSearch:
         self.cache = OrderedDict()
         self.calls = deque()
 
+    def invalidate(self, title, artist):
+        with self.lock:
+            self.cache.pop((title.casefold(), artist.casefold()), None)
+
     def search(self, title, artist, limit=8):
         term = ' '.join(f'{title} {artist}'.split())
         key = (title.casefold(), artist.casefold())
@@ -29,7 +33,7 @@ class SongSearch:
                 raise ValueError('Search is busy. Try again shortly, or enter the song manually.')
             self.calls.append(now)
             response = requests.get('https://itunes.apple.com/search', params={
-                'term': term, 'media': 'music', 'entity': 'song', 'limit': 20,
+                'term': term, 'media': 'music', 'entity': 'song', 'limit': 20, 'explicit': 'Yes',
             }, timeout=5)
             response.raise_for_status()
             body = response.json()
@@ -42,11 +46,15 @@ class SongSearch:
                 name, performer = item.get('trackName'), item.get('artistName')
                 if not all(isinstance(v, str) and 0 < len(v.strip()) <= 200 for v in (name, performer)):
                     continue
-                identity = (name.strip(), performer.strip())
+                identity = (name.strip(), performer.strip(), item.get('trackExplicitness'), item.get('trackId'))
                 if identity in seen:
                     continue
                 seen.add(identity)
-                songs.append(dict(title=name.strip(), artist=performer.strip()))
+                song = dict(title=name.strip(), artist=performer.strip())
+                for source, target in [('trackExplicitness', 'explicitness'), ('trackId', 'track_id'), ('collectionName', 'album')]:
+                    if isinstance(item.get(source), (str, int)):
+                        song[target] = item[source]
+                songs.append(song)
             def score(song):
                 return sum(SequenceMatcher(None, query.casefold(), song[field].casefold()).ratio()
                            for field, query in [('title', title), ('artist', artist)] if query)

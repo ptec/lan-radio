@@ -82,7 +82,7 @@ test('Broken headers pause only that station, not updates to the others',()=>{
 test('New station approval is a tab rename; retries never resurrect deleted tabs',()=>{
   const r={id:token(2),type:'station',name:'Jazz'};
   assert.equal(submit(r).acknowledged.length,1);
-  const tab=ss.getSheetByName('pending:Jazz');assert(tab);assert.deepEqual(tab.rows[0],HEADERS);assert.equal(catalog().stations[0].status,'pending');
+  const tab=ss.getSheetByName('pending:Jazz');assert(tab);assert.deepEqual(tab.rows[0],[...HEADERS,'Notes']);assert.equal(catalog().stations[0].status,'pending');
   tab.name='station:Jazz';assert.equal(catalog().stations[0].status,'approved');
   submit(r);assert(!ss.getSheetByName('pending:Jazz'));
   sheets=sheets.filter(s=>s!==tab);submit(r);assert.equal(catalog().stations.length,0);
@@ -109,7 +109,29 @@ test('Legacy migration copies independent playlists without touching originals',
   const oldSongs=new Sheet('Songs',[['id','station_id','title','artist','status','youtube_id','created_at'],['song1','s1','Song','Artist','approved','','']]);
   sheets.push(oldStations,oldSongs);const before=JSON.stringify(oldSongs.rows);context.migrateLegacy();
   assert.equal(JSON.stringify(oldSongs.rows),before);const rock=ss.getSheetByName('station:Rock');assert(rock);
-  assert.deepEqual(rock.rows,[HEADERS,['Song','Artist','approved','']]);assert.equal(catalog().stations.length,1);
+  assert.deepEqual(rock.rows,[[...HEADERS,'Notes'],['Song','Artist','approved','','']]);assert.equal(catalog().stations.length,1);
   assert.throws(()=>context.migrateLegacy(),/already exists/);
 });
+
+
+test('Moderation decisions and notes round-trip, preserve other cells, and detect stale notes',()=>{
+  const sheet=new Sheet('station:Rock',[['Notes',...HEADERS,'Other'],['Old note','Song','Artist','pending','','keep']]);sheets.push(sheet);
+  const original={title:'Song',artist:'Artist',status:'pending',youtube_id:'',notes:'Old note'};
+  const data={action:'edit',station:'Rock',station_status:'approved',original,changes:{title:'Song',artist:'Artist',youtube_id:'',status:'rejected',notes:'=Literal reason'}};
+  assert.equal(post(data).moderation_version,1);
+  assert.deepEqual(sheet.rows[1],['=Literal reason','Song','Artist','rejected','','keep']);
+  assert.equal(catalog().stations[0].songs[0].notes,'=Literal reason');
+  data.original={...original,status:'rejected'};
+  assert.equal(post(data).conflict,true);
+  data.original.notes='=Literal reason';data.changes.notes='';data.changes.status='approved';
+  assert.equal(post(data).ok,true);assert.equal(sheet.rows[1][0],'');assert.equal(sheet.rows[1][3],'approved');
+});
+test('Missing optional Notes and YouTube headers are added without replacing other columns',()=>{
+  const sheet=new Sheet('station:Rock',[['Title','Artist','Status','Other'],['Song','Artist','pending','keep']]);sheets.push(sheet);
+  const data={action:'edit',station:'Rock',station_status:'approved',original:{title:'Song',artist:'Artist',status:'pending',youtube_id:'',notes:''},changes:{title:'Song',artist:'Artist',status:'approved',youtube_id:'abcdefghijk',notes:'Verified'}};
+  assert.equal(post(data).ok,true);
+  assert.deepEqual(sheet.rows[0],['Title','Artist','Status','Other','YouTube ID','Notes']);
+  assert.deepEqual(sheet.rows[1],['Song','Artist','approved','keep','abcdefghijk','Verified']);
+});
+
 console.log(passed+' Apps Script scenario tests passed.');

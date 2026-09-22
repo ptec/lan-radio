@@ -85,7 +85,7 @@ def create_app(store, broadcasts, sync, stop, max_listeners=24):
         if not station:
             return jsonify(error='Station not found'), 404
         states = store.media_states()
-        songs = [dict(id=s['id'], title=s['title'], artist=s['artist'], status=s['status'].lower(),
+        songs = [dict(id=s['id'], title=s['title'], artist=s['artist'], status=s['status'].lower(), notes=s.get('notes', ''),
                       queued=False, cached=store.path(s).is_file(),
                       download_status='ready' if store.path(s).is_file() else states.get(media_key(s), 'queued'),
                       can_retry=station['status'].lower() == 'approved' and s['status'].lower() == 'approved'

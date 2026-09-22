@@ -28,6 +28,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS media (key TEXT PRIMARY KEY, state TEXT, error TEXT, retry REAL);
                 CREATE TABLE IF NOT EXISTS rejected_requests (id TEXT PRIMARY KEY, body TEXT, error TEXT);
                 CREATE TABLE IF NOT EXISTS sync_failures (id INTEGER PRIMARY KEY AUTOINCREMENT, occurred_at REAL, error TEXT);
+                CREATE TABLE IF NOT EXISTS review_details (key TEXT PRIMARY KEY, body TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS metadata_reviews (key TEXT PRIMARY KEY, state TEXT, checked_at REAL);
                 CREATE TABLE IF NOT EXISTS cache_control (id INTEGER PRIMARY KEY, generation INTEGER NOT NULL);
                 INSERT OR IGNORE INTO cache_control VALUES (1, 0);

@@ -51,3 +51,11 @@ No Google account was contacted during these tests. The active .env and cached d
 All 31 Python tests passed, including up-next rotation, wraparound, and skipping uncached/unapproved songs. Node DOM interaction checks passed for initial station selection, up-next display, browsing without changing audio, request targeting, search/status filters, tuning, and manual sync. An isolated HTTP preview served the new page and stylesheet successfully. JavaScript syntax passed.
 
 Browser automation reported no available browser, so desktop/mobile visual rendering has not been verified. The isolated preview used sample data and did not contact Google or change the live catalog.
+
+## Moderation and advisory scans (2026-09-22)
+
+- Verified 54 Python tests and all five JavaScript test scripts, including 13 Apps Script scenarios.
+- Added coverage for explicit/cleaned/notExplicit ratings, conflicting versions, missing results, provider failures, persistence, duplicate songs across stations, targeted/pending/unchecked/all scan selection, and concurrent scan rejection.
+- Added moderation save coverage for status and notes validation, spreadsheet-note conflicts, older Apps Script acknowledgments, literal notes, reordered/missing optional columns, and public notes exposure.
+- Interface tests cover the separate Moderation/Checks cells, saved moderation drafts and notes, pending/unchecked scan requests, explicit filtering, and existing playback/suggestions behavior.
+- No live Google Sheets writes, YouTube downloads, or browser visual verification were performed for this change. Deploy the updated Code.gs web-app version, restart the service, and sync before using moderation saves. iTunes advisories describe catalog matches, not the downloaded audio.

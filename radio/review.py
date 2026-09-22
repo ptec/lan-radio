@@ -1,4 +1,4 @@
-"""Advisory iTunes comparisons; never alter catalog or approval."""
+"""Persistent advisory iTunes checks; never change approval or downloaded audio."""
 import hashlib
 import json
 import threading
@@ -17,29 +17,56 @@ class MetadataReview:
 
     def results(self):
         with self.store.connect() as db:
-            return {key:dict(state=state, checked_at=at) for key, state, at in db.execute('SELECT key, state, checked_at FROM metadata_reviews')}
+            results = {key:dict(state=state, checked_at=at, explicit_state='unchecked')
+                       for key, state, at in db.execute('SELECT key, state, checked_at FROM metadata_reviews')}
+            for key, body in db.execute('SELECT key, body FROM review_details'):
+                if key in results:
+                    results[key].update(json.loads(body))
+            return results
 
     def status(self):
         with self.lock:
             return dict(self.progress)
 
     def check(self, song):
+        details = dict(explicit_state='error', candidates=[])
         try:
+            self.search.invalidate(song['title'], song['artist'])
             candidates = self.search.search(song['title'], song['artist'], limit=20)
-            state = 'matched' if any(s['title'] == song['title'] and s['artist'] == song['artist'] for s in candidates) else 'review'
+            matches = [s for s in candidates if s['title'] == song['title'] and s['artist'] == song['artist']]
+            state = 'matched' if matches else 'review'
+            ratings = {s.get('explicitness', 'unknown') for s in matches}
+            rating = next(iter(ratings)) if len(ratings) == 1 else 'ambiguous' if ratings else 'unknown'
+            if rating not in ('explicit', 'cleaned', 'notExplicit', 'ambiguous'):
+                rating = 'unknown'
+            details = dict(explicit_state=rating, candidates=candidates)
         except Exception:
             state = 'error'
         with self.store.connect() as db:
-            db.execute('INSERT OR REPLACE INTO metadata_reviews VALUES (?, ?, ?)', (review_key(song), state, time.time()))
+            key = review_key(song)
+            db.execute('INSERT OR REPLACE INTO metadata_reviews VALUES (?, ?, ?)', (key, state, time.time()))
+            db.execute('INSERT OR REPLACE INTO review_details VALUES (?, ?)', (key, json.dumps(details)))
         return state
 
-    def start(self, force=False):
+    def start(self, force=False, scope=None, song_id=None, tool='metadata'):
+        scope = scope or ('all' if force else 'unchecked')
+        if scope not in ('all', 'unchecked', 'pending', 'song') or tool not in ('metadata', 'explicit'):
+            raise ValueError('Invalid scan scope or tool')
         with self.lock:
             if self.progress['running']:
                 return False
             known = self.results()
-            unique = {review_key(song):song for song in self.store.snapshot()['songs']}
-            queue = [song for key,song in unique.items() if force or known.get(key, {}).get('state') not in ('matched', 'review')]
+            songs = self.store.snapshot()['songs']
+            if scope == 'song':
+                songs = [s for s in songs if s['id'] == song_id]
+                if not songs:
+                    raise ValueError('Song was removed or changed. Reload the catalog.')
+            if scope == 'pending':
+                songs = [s for s in songs if s['status'] == 'pending']
+            unique = {review_key(song):song for song in songs}
+            field = 'state' if tool == 'metadata' else 'explicit_state'
+            queue = [song for key, song in unique.items() if scope in ('all', 'song') or
+                     known.get(key, {}).get(field, 'unchecked') in ('unchecked', 'error')]
             self.progress = dict(running=True, completed=0, total=len(queue), errors=0)
             threading.Thread(target=self.run, args=(queue,), daemon=True, name='itunes-review').start()
             return True

@@ -3,6 +3,7 @@ import json
 import re
 import sqlite3
 import time
+import threading
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -15,6 +16,9 @@ def media_key(song):
 
 class Store:
     def __init__(self, directory):
+        self._playback_lock = threading.RLock()
+        self._playback_songs = None
+        self._playback_ids = frozenset()
         self.root = Path(directory).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.cache = self.root / 'cache'
@@ -62,8 +66,12 @@ class Store:
                 seen.add(row['id'])
                 if name == 'songs' and not isinstance(row.get('youtube_id', ''), str):
                     raise ValueError('Invalid YouTube ID')
-        with self.connect() as db:
-            db.execute('INSERT OR REPLACE INTO snapshot VALUES (1, ?)', (json.dumps(data),))
+        body = json.dumps(data)
+        # Commit before publishing the replacement to playback threads.
+        with self._playback_lock:
+            with self.connect() as db:
+                db.execute('INSERT OR REPLACE INTO snapshot VALUES (1, ?)', (body,))
+            self._index_playback(json.loads(body))
 
     def enqueue(self, body):
         item = dict(body, id=str(uuid.uuid4()), created_at=time.time())
@@ -89,6 +97,30 @@ class Store:
         with self.connect() as db:
             db.execute('INSERT OR REPLACE INTO rejected_requests SELECT id, body, ? FROM outbox WHERE id=?',
                        (error, request_id))
+
+    def _index_playback(self, data):
+        active = {s['id'] for s in data['stations'] if s['status'].lower() == 'approved'}
+        grouped = {}
+        for song in data['songs']:
+            if song['status'].lower() == 'approved' and song['station_id'] in active:
+                grouped.setdefault(song['station_id'], []).append(song)
+        self._playback_songs = grouped
+        self._playback_ids = frozenset((song['station_id'], song['id'])
+                                      for songs in grouped.values() for song in songs)
+
+    def playback_songs(self, station):
+        # Only the broadcaster uses this process-local index. The download
+        # process continues reading SQLite so it sees another process's syncs.
+        with self._playback_lock:
+            if self._playback_songs is None:
+                self._index_playback(self.snapshot())
+            return [dict(song) for song in self._playback_songs.get(station, ())]
+
+    def playback_approved(self, station, song_id):
+        with self._playback_lock:
+            if self._playback_songs is None:
+                self._index_playback(self.snapshot())
+            return (station, song_id) in self._playback_ids
 
     def approved(self, station=None):
         data = self.snapshot()

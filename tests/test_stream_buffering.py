@@ -8,8 +8,8 @@ class StreamBufferingTests(unittest.TestCase):
     def test_first_response_waits_for_audio_then_continues_without_rebuffering(self):
         listener = queue.Queue()
         stop = threading.Event()
-        # Eight distinct chunks represent two seconds of 128 kbps audio.
-        chunks = [bytes([n]) * 4000 for n in range(8)]
+        # Sixteen distinct chunks represent four seconds of 128 kbps audio.
+        chunks = [bytes([n]) * 4000 for n in range(16)]
         for chunk in chunks[:-1]:
             listener.put(chunk)
         stream = buffered_audio(listener, stop)
@@ -46,10 +46,10 @@ class StreamBufferingTests(unittest.TestCase):
         streams = []
         for value in (b'a', b'b'):
             listener = queue.Queue()
-            listener.put(value * 33000)
+            listener.put(value * 65000)
             listener.put(None)
             streams.append(list(buffered_audio(listener, threading.Event())))
-        self.assertEqual(streams, [[b'a' * 33000], [b'b' * 33000]])
+        self.assertEqual(streams, [[b'a' * 65000], [b'b' * 65000]])
 
 
 if __name__ == '__main__':

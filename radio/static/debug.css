@@ -48,3 +48,5 @@ tr.dirty{background:#342f22}tr.dirty td:first-child{box-shadow:inset 3px 0 #e7bc
 .tool-guide{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:12px 18px;align-items:start;margin:16px 0}.tool-guide dt,.tool-guide dd{margin:0}.tool-guide dd{color:var(--muted);max-width:85ch}.cache-tools>p{max-width:105ch}@media(max-width:700px){.tool-guide{grid-template-columns:1fr;gap:6px}.tool-guide dd{margin-bottom:12px}}
 
 .tool-guide dt button{width:100%}
+
+#playback-status{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.85rem}

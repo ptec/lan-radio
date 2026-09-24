@@ -11,8 +11,10 @@ from .store import media_key
 
 
 # Cached MP3s are normalized to 128 kbps. Accumulate complete frames for
-# approximately two seconds before sending the first bytes to a new listener.
-STARTUP_BUFFER_BYTES = 128000 // 8 * 2
+# approximately four seconds before sending the first bytes to a new listener.
+# Leave a reserve beyond the roughly two-second buffered-range updates observed
+# in Chrome. After this initial burst, forward every live chunk immediately.
+STARTUP_BUFFER_BYTES = 128000 // 8 * 4
 
 
 def buffered_audio(listener, stop):

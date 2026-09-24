@@ -102,6 +102,11 @@ def register_testing(app, store, broadcasts, sync, search, stop):
                        cache_files=len(files), cache_bytes=sum(p.stat().st_size for p in files if p.exists()),
                        review_scan=review.status(), last_sync=sync.last_success, sync_error=sync.error, **store.diagnostics())
 
+    @app.get('/api/admin/playback')
+    @protected
+    def playback_diagnostics():
+        return jsonify(stations=broadcasts.diagnostics())
+
     @app.post('/api/admin/review')
     @protected
     def review_start():

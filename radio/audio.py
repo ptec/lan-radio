@@ -1,5 +1,6 @@
 """Frame-aligned, paced MPEG-1 Layer III broadcasting, independent of listeners."""
 import logging
+import math
 import queue
 import random
 import threading
@@ -8,6 +9,7 @@ from .store import media_key
 
 LOG = logging.getLogger(__name__)
 FRAME_SECONDS = 1152 / 44100
+LISTENER_QUEUE_CHUNKS = math.ceil(8 / (10 * FRAME_SECONDS))
 
 
 class ShuffleRotation:
@@ -68,12 +70,17 @@ class Station:
         self.lock = threading.Lock()
         self.listeners = set()
         self.current = None
+        self.slow_disconnects = 0
+        self.late_chunks = 0
+        self.max_lateness = 0.0
+        self.last_late_at = None
+        self.cache_errors = 0
         self.rotation = ShuffleRotation()
         self.retired = threading.Event()
         self.thread = threading.Thread(target=self.run, name='station-' + station_id, daemon=True)
 
     def subscribe(self):
-        listener = queue.Queue(maxsize=8)  # about two seconds; slow clients disconnect
+        listener = queue.Queue(maxsize=LISTENER_QUEUE_CHUNKS)  # about eight seconds
         with self.lock:
             self.listeners.add(listener)
         return listener
@@ -88,6 +95,7 @@ class Station:
                 try:
                     listener.put_nowait(chunk)
                 except queue.Full:
+                    self.slow_disconnects += 1
                     self.listeners.remove(listener)
                     while not listener.empty():
                         try:
@@ -96,17 +104,26 @@ class Station:
                             break
                     listener.put_nowait(None)
 
+    def diagnostics(self):
+        with self.lock:
+            return dict(station_id=self.id, thread_alive=self.thread.is_alive(), listeners=len(self.listeners),
+                        queue_capacity_chunks=LISTENER_QUEUE_CHUNKS,
+                        max_queue_chunks=max((q.qsize() for q in self.listeners), default=0),
+                        slow_disconnects=self.slow_disconnects, late_chunks=self.late_chunks,
+                        max_lateness_ms=round(self.max_lateness * 1000), last_late_at=self.last_late_at,
+                        cache_errors=self.cache_errors)
+
     def playback(self):
         with self.lock:
             current = self.current
-            songs = [s for s in self.store.approved(self.id) if self.store.path(s).is_file()]
+            songs = [s for s in self.store.playback_songs(self.id) if self.store.path(s).is_file()]
             following = self.rotation.peek(songs)
         return dict(now_playing=current, up_next=dict(title=following['title'], artist=following['artist']) if following else None)
 
     def run(self):
         while not self.stop.is_set() and not self.retired.is_set():
             with self.lock:
-                songs = [s for s in self.store.approved(self.id) if self.store.path(s).is_file()]
+                songs = [s for s in self.store.playback_songs(self.id) if self.store.path(s).is_file()]
                 song = self.rotation.take(songs)
                 self.current = dict(title=song['title'], artist=song['artist'], started_at=time.time()) if song else None
             if song is None:
@@ -122,9 +139,15 @@ class Station:
                     batch.append(frame)
                     if len(batch) == 10:
                         # Re-check approval while playing so revocation stops promptly.
-                        if not any(s['id'] == song['id'] for s in self.store.approved(self.id)):
+                        if not self.store.playback_approved(self.id, song['id']):
                             batch = []
                             break
+                        lateness = max(0, time.monotonic() - deadline)
+                        with self.lock:
+                            self.max_lateness = max(self.max_lateness, lateness)
+                            if lateness > .1:
+                                self.late_chunks += 1
+                                self.last_late_at = time.time()
                         self.publish(b''.join(batch))
                         deadline += len(batch) * FRAME_SECONDS
                         batch = []
@@ -135,6 +158,8 @@ class Station:
                     deadline += len(batch) * FRAME_SECONDS
                     self.stop.wait(max(0, deadline - time.monotonic()))
             except (OSError, ValueError):
+                with self.lock:
+                    self.cache_errors += 1
                 LOG.exception('Bad cache entry for %s', song['id'])
                 self.store.path(song).unlink(missing_ok=True)
                 self.stop.wait(1)
@@ -160,6 +185,11 @@ class Broadcasts:
                     station = Station(self.store, s['id'], self.stop)
                     self.stations[s['id']] = station
                     station.thread.start()
+
+    def diagnostics(self):
+        with self.lock:
+            stations = list(self.stations.values())
+        return [station.diagnostics() for station in stations]
 
     def get(self, station_id):
         with self.lock:

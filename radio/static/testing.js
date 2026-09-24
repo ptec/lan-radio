@@ -198,6 +198,19 @@
       cell.colSpan = 8; cell.textContent = 'No matching songs.'; row.append(cell); $('songs').append(row);
     }
   }
+  async function playbackDiagnostics() {
+    if (!$('playback-diagnostics').open) return;
+    try {
+      const result = await api('/api/admin/playback');
+      $('playback-status').textContent = result.stations.map(s =>
+        `${stations.find(station => station.id === s.station_id)?.name || s.station_id}: ${s.thread_alive ? 'running' : 'STOPPED'}\n` +
+        `Listeners: ${s.listeners} | Largest queue: ${s.max_queue_chunks}/${s.queue_capacity_chunks} chunks\n` +
+        `Slow disconnects: ${s.slow_disconnects} | Late chunks: ${s.late_chunks} | Worst delay: ${s.max_lateness_ms} ms\n` +
+        `Last late chunk: ${s.last_late_at ? new Date(s.last_late_at*1000).toLocaleString() : 'Never'} | Cache errors: ${s.cache_errors}`
+      ).join('\n\n') || 'No active stations.';
+    } catch(error) { $('playback-status').textContent = 'Diagnostics unavailable: '+error.message; }
+  }
+  $('playback-diagnostics').ontoggle = playbackDiagnostics;
   let statsVersion = 0;
   function renderStats(data) {
     const {songs, stations} = data;
@@ -221,6 +234,7 @@
   }
   async function refreshStats() {
     const version = ++statsVersion;
+    await playbackDiagnostics();
     try {
       const data = await api('/api/admin');
       if (version === statsVersion) renderStats(data);

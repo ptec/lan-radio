@@ -118,8 +118,12 @@ class RadioTests(unittest.TestCase):
     def test_slow_client_is_disconnected(self):
         station = Station(self.store,'station1',self.stop)
         listener = station.subscribe()
-        for _ in range(9):
+        self.assertEqual(listener.maxsize, 31)
+        for _ in range(listener.maxsize):
             station.publish(b'audio')
+        self.assertIn(listener, station.listeners)
+        self.assertEqual(listener.qsize(), 31)
+        station.publish(b'audio')
         self.assertIsNone(listener.get_nowait())
         self.assertNotIn(listener, station.listeners)
 

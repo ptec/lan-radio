@@ -52,7 +52,7 @@ function tune(id, browse = true) {
   if (browse) selectStation(id);
   tuned = id; paused = false; connecting = true;
   const version = ++tuneVersion;
-  $('#player-message').textContent = 'Buffering about two seconds of live audio…';
+  $('#player-message').textContent = 'Buffering about four seconds of live audio…';
   $('#audio').src = '/stream/' + encodeURIComponent(id) + '?t=' + Date.now();
   $('#audio').play().catch(() => {
     if (version === tuneVersion) { paused = true; $('#player-message').textContent = 'Press Play to try again.'; }

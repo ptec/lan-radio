@@ -3,7 +3,8 @@ import json
 import time
 import threading
 import re
-from urllib.parse import quote
+import ssl
+from urllib.parse import quote, urlsplit
 import requests
 from .catalog import normalize_catalog
 
@@ -12,6 +13,10 @@ LOG = logging.getLogger(__name__)
 
 class SyncError(RuntimeError):
     """An actionable error safe to display after secret redaction."""
+
+
+class CatalogRedirectError(SyncError):
+    """The catalog response redirect returned 404; a fresh read may succeed."""
 
 
 class SheetSync:
@@ -59,19 +64,80 @@ class SheetSync:
             return 'queued'
 
     def call(self, **body):
+        for attempt in range(3):
+            try:
+                return self._call_once(**body)
+            except CatalogRedirectError:
+                if attempt == 2:
+                    raise
+                LOG.warning('Catalog response redirect returned 404; requesting a fresh catalog (attempt %s/3).', attempt + 2)
+                time.sleep(attempt + 1)
+
+    def _call_once(self, **body):
+        operation = {'catalog':'catalog fetch', 'edit_batch':'save edits', 'edit':'save edit',
+                     'submit':'upload requests'}.get(body.get('action'), 'Sheets request')
+        hops = []
+        def host(url):
+            try:
+                value = urlsplit(url).hostname
+            except (ValueError, TypeError):
+                return 'unknown host'
+            return value if value in ('script.google.com', 'script.googleusercontent.com', 'accounts.google.com') else 'configured or other host'
+        def observe(response, *args, **kwargs):
+            # Never retain URLs, headers, payloads, or redirected query tokens.
+            hops.append((host(response.url), response.status_code))
+        def diagnostic(message, failed_request=None):
+            url = getattr(failed_request, 'url', None)
+            target = host(url) if isinstance(url, str) else (hops[-1][0] if hops else host(self.url))
+            stage = 'response redirect' if any(300 <= code < 400 for _, code in hops) else 'deployment request'
+            chain = ' -> '.join(f'{name} HTTP {code}' for name, code in hops) or 'no HTTP response received'
+            text = f'{operation}: {message} Stage: {stage}; host: {target}; responses: {chain}.'
+            LOG.warning('%s', text)
+            return SyncError(text)
         try:
-            response = requests.post(self.url, data={'payload': json.dumps(dict(token=self.token, **body))}, timeout=45)
-        except requests.exceptions.SSLError:
-            raise SyncError('TLS certificate verification failed. Check the system clock and trusted CA certificates, including any corporate proxy CA.') from None
-        except requests.exceptions.Timeout:
-            raise SyncError('Apps Script did not respond within 45 seconds. Retry Sync now; check Apps Script Executions if this repeats.') from None
-        except requests.exceptions.ConnectionError:
-            raise SyncError('Cannot connect to Google. Check network access, DNS and proxy settings.') from None
-        except requests.exceptions.RequestException:
-            raise SyncError('HTTP request failed. Check SHEETS_URL and the network/proxy configuration.') from None
+            response = requests.post(self.url, data={'payload': json.dumps(dict(token=self.token, **body))},
+                                     timeout=45, hooks={'response': observe})
+        except requests.exceptions.SSLError as exc:
+            # Requests/urllib3 wrap the original SSL exception in args/reason.
+            pending, seen, codes = [exc], set(), []
+            certificate = False
+            while pending:
+                error = pending.pop()
+                if id(error) in seen:
+                    continue
+                seen.add(id(error))
+                if isinstance(error, ssl.SSLCertVerificationError):
+                    certificate = True
+                    code = getattr(error, 'verify_code', None)
+                    if isinstance(code, int): codes.append(f'verify_code={code}')
+                if isinstance(error, BaseException):
+                    pending.extend(error.args)
+                    pending.extend(v for v in (getattr(error, 'reason', None), error.__cause__, error.__context__) if v is not None)
+                # Only emit standard symbolic reason codes, never raw exception text.
+                text = str(error)
+                for code in ('CERTIFICATE_VERIFY_FAILED','UNEXPECTED_EOF_WHILE_READING',
+                             'WRONG_VERSION_NUMBER','TLSV1_ALERT_INTERNAL_ERROR',
+                             'SSLV3_ALERT_HANDSHAKE_FAILURE','TLSV1_ALERT_PROTOCOL_VERSION',
+                             'TLSV1_ALERT_UNKNOWN_CA','CERTIFICATE_EXPIRED'):
+                    if code in text and code not in codes: codes.append(code)
+            certificate = certificate or 'CERTIFICATE_VERIFY_FAILED' in codes
+            kind = 'TLS certificate verification failed' if certificate else 'TLS connection failed (certificate verification failure not established)'
+            reason = ', '.join(codes) or 'no structured TLS reason available'
+            raise diagnostic(f'{kind}; {reason}.', getattr(exc, 'request', None)) from None
+        except requests.exceptions.Timeout as exc:
+            raise diagnostic('Apps Script did not respond within 45 seconds.', exc.request) from None
+        except requests.exceptions.ConnectionError as exc:
+            raise diagnostic('Cannot connect to Google. Check network access, DNS and proxy settings.', exc.request) from None
+        except requests.exceptions.RequestException as exc:
+            raise diagnostic('HTTP request failed. Check network/proxy configuration.', exc.request) from None
         if not response.ok:
-            hint = 'Check the deployment URL and access permissions.' if response.status_code in (401, 403, 404) else 'Retry Sync now; check Apps Script availability and quotas.'
-            raise SyncError(f'Apps Script returned HTTP {response.status_code}. {hint}')
+            hint = 'Check deployment access or the response redirect.' if response.status_code in (401, 403, 404) else 'Check Apps Script availability and quotas.'
+            error = diagnostic(f'Apps Script returned HTTP {response.status_code}. {hint}', getattr(response, 'request', None))
+            if (body.get('action') == 'catalog' and response.status_code == 404
+                    and hops and hops[-1][0] == 'script.googleusercontent.com'
+                    and any(name == 'script.google.com' and code == 302 for name, code in hops)):
+                raise CatalogRedirectError(str(error))
+            raise error
         try:
             data = response.json()
         except ValueError:

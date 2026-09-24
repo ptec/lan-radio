@@ -9,6 +9,9 @@
 <audio id="preview" preload="none"></audio></section></div>
 
 <div id="stats" role="status">Loading statistics...</div><p id="stats-updated" class="note" role="status"></p><p id="sync-detail" class="note"></p>
+<details class="cache-tools" id="playback-diagnostics"><summary>Playback diagnostics</summary>
+<p>Updates every five seconds while open. Counters cover each station's current runtime and reset when the service restarts or the station is recreated. Late chunks mean the broadcaster missed its schedule by over 100 ms; this can indicate CPU, disk, database, or scheduling delays. Slow-listener disconnects mean a server-side queue filled; they can indicate a blocked connection or server congestion, not necessarily Wi-Fi trouble. These measurements do not measure the browser's audio buffer.</p>
+<pre id="playback-status" role="status">Open to load diagnostics.</pre></details>
 <details class="cache-tools">
   <summary>Cache maintenance</summary>
   <p>The cache holds downloaded audio so songs can play without being downloaded again. Use these tools to reclaim space after catalog changes or rebuild the audio library.</p>

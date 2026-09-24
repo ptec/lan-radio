@@ -74,3 +74,62 @@ class SyncErrorTests(unittest.TestCase):
         for _ in range(15):
             reopened.record_sync_failure('error')
         self.assertEqual(len(reopened.diagnostics()['recent_sync_failures']), 10)
+
+    def test_redirect_tls_diagnostics_do_not_leak_urls_or_payloads(self):
+        import ssl
+        from urllib3.exceptions import MaxRetryError, SSLError
+        target = requests.Request('GET','https://script.googleusercontent.com/macros/echo?private=secret-token').prepare()
+        original = ssl.SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] private-data')
+        wrapped = requests.exceptions.SSLError(MaxRetryError(None, '/private-url', SSLError(original)),request=target)
+        def fail(url, **kwargs):
+            kwargs['hooks']['response'](SimpleNamespace(url=url,status_code=302))
+            raise wrapped
+        with patch('radio.sync.requests.post',side_effect=fail), self.assertLogs('radio.sync',level='WARNING') as logs:
+            with self.assertRaises(SyncError) as caught: self.sync.call(action='edit_batch')
+        text = str(caught.exception)
+        self.assertIn('save edits',text)
+        self.assertIn('response redirect',text)
+        self.assertIn('script.googleusercontent.com',text)
+        self.assertIn('CERTIFICATE_VERIFY_FAILED',text)
+        for secret in ('secret-token','private-data','private-url','macros/echo'):
+            self.assertNotIn(secret,text+' '.join(logs.output))
+
+    def test_generic_tls_is_not_reported_as_certificate_failure(self):
+        with patch('radio.sync.requests.post',side_effect=requests.exceptions.SSLError('[SSL: UNEXPECTED_EOF_WHILE_READING] secret-token')):
+            with self.assertRaises(SyncError) as caught: self.sync.call(action='catalog')
+        self.assertIn('TLS connection failed',str(caught.exception))
+        self.assertIn('UNEXPECTED_EOF_WHILE_READING',str(caught.exception))
+        self.assertIn('deployment request',str(caught.exception))
+        self.assertNotIn('secret-token',str(caught.exception))
+
+    def test_redirect_http_status_is_distinguished(self):
+        def reply(url, **kwargs):
+            hook=kwargs['hooks']['response']
+            hook(SimpleNamespace(url=url,status_code=302))
+            response=SimpleNamespace(ok=False,status_code=404,url='https://script.googleusercontent.com/private',request=None)
+            hook(response)
+            return response
+        with patch('radio.sync.requests.post',side_effect=reply) as post, patch('radio.sync.time.sleep'):
+            with self.assertRaises(SyncError) as caught: self.sync.call(action='catalog')
+        self.assertEqual(post.call_count,3)
+        self.assertIn('response redirect',str(caught.exception))
+        self.assertIn('script.googleusercontent.com HTTP 404',str(caught.exception))
+
+
+    def test_catalog_redirect_retry_recovers_without_retrying_writes(self):
+        calls = []
+        def reply(url, **kwargs):
+            calls.append(json.loads(kwargs['data']['payload'])['action'])
+            kwargs['hooks']['response'](SimpleNamespace(url=url,status_code=302))
+            response = Mock(ok=len(calls) > 1, status_code=404 if len(calls) == 1 else 200,
+                            url='https://script.googleusercontent.com/private', request=None)
+            response.json.return_value = {'ok':True}
+            kwargs['hooks']['response'](response)
+            return response
+        with patch('radio.sync.requests.post',side_effect=reply), patch('radio.sync.time.sleep') as sleep:
+            self.assertEqual(self.sync.call(action='catalog'), {'ok':True})
+            self.assertEqual(calls,['catalog','catalog'])
+            sleep.assert_called_once_with(1)
+            calls.clear()
+            with self.assertRaises(SyncError): self.sync.call(action='edit_batch')
+            self.assertEqual(calls,['edit_batch'])

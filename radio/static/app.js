@@ -134,10 +134,10 @@ function renderSongs() {
     }
     const cell=document.createElement('td'), badge=document.createElement('span');
     badge.className = 'song-status ' + (song.status === 'approved' ? 'approved' : song.status === 'rejected' ? 'rejected' : 'pending');
-    badge.textContent = song.queued ? 'Waiting to sync' : song.status === 'pending' ? 'Pending approval' : song.status === 'rejected' ? 'Rejected' : song.status === 'approved' ? 'Approved' : song.status;
+    badge.textContent = song.queued ? 'Waiting to sync' : song.status === 'pending' ? 'Pending approval' : song.status === 'rejected' ? 'Not approved' : song.status === 'approved' ? 'Approved' : song.status;
     if (song.notes) {
       const notes = document.createElement('details'); notes.className = 'song-notes';
-      const summary = document.createElement('summary'); summary.setAttribute('aria-label', song.status + '. Moderator notes: ' + song.notes);
+      const summary = document.createElement('summary'); summary.setAttribute('aria-label', (song.status === 'rejected' ? 'Not approved' : song.status) + '. Moderator notes: ' + song.notes);
       const icon = document.createElement('span'); icon.textContent = ' \u24d8'; icon.setAttribute('aria-label','Moderator notes');
       summary.append(badge, icon);
       const text = document.createElement('p'); text.textContent = song.notes;

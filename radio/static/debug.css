@@ -50,3 +50,5 @@ tr.dirty{background:#342f22}tr.dirty td:first-child{box-shadow:inset 3px 0 #e7bc
 .tool-guide dt button{width:100%}
 
 #playback-status{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.85rem}
+
+.app-version{display:block;padding:6px 16px;color:#a8b3c3;font-size:12px;font-variant-numeric:tabular-nums}

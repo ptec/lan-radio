@@ -1,9 +1,9 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
-const HEADERS=['Title','Artist','Status','YouTube ID'];
+const HEADERS=['Title','Artist','YouTube Id','Status','Notes'];
 class Sheet {
   constructor(name,rows=[]){this.name=name;this.rows=rows;this.raw=[];}
   getName(){return this.name;}
-  getDataRange(){return {getDisplayValues:()=>this.rows.length?this.rows.map(r=>[...r]):[['']]};}
+  getDataRange(){return {getValues:()=>this.rows.length?this.rows.map(r=>[...r]):[['']]};}
   getLastRow(){return this.rows.length;}
   getLastColumn(){return Math.max(1,...this.rows.map(r=>r.length));}
   getMaxRows(){return 1000;}
@@ -17,121 +17,23 @@ let sheets=[],locked=false;
 const ss={getSheets:()=>sheets,getSheetByName:name=>sheets.find(s=>s.name===name),
   insertSheet:name=>{assert(!sheets.some(s=>s.name===name));const s=new Sheet(name);sheets.push(s);return s;},getId:()=> 'sheet'};
 const validation={requireValueInList(){return this;},setAllowInvalid(){return this;},build(){return {};}};
-const context={ContentService:{MimeType:{JSON:'json'},createTextOutput:text=>({text,setMimeType(){return this;}})},
+const context={ContentService:{MimeType:{JSON:'json'},createTextOutput:text=>({text,setContent(value){this.text=value;return this;},setMimeType(){return this;}})},
   PropertiesService:{getScriptProperties:()=>({getProperty:k=>k==='SHEETS_TOKEN'?'secret':'sheet',setProperty(){}})},
-  LockService:{getScriptLock:()=>({waitLock(){locked=true;},hasLock:()=>locked,releaseLock(){locked=false;}})},
+  LockService:{getScriptLock:()=>{throw Error('Script must not acquire a lock');}},
   SpreadsheetApp:{openById:()=>ss,getActiveSpreadsheet:()=>ss,flush(){},newDataValidation:()=>validation}};
 vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../google-apps-script/Code.gs'),'utf8'),context);
-const post=data=>JSON.parse(context.doPost({postData:{contents:JSON.stringify({token:'secret',...data})}}).text);
-const catalog=()=>post({action:'catalog'});
-const token=n=>String(n).padStart(8,'0')+'-1234-1234-1234-123456789abc';
-const submit=(...requests)=>post({action:'submit',requests});
-let passed=0;
-function test(name,body){sheets=[new Sheet('Notes',[['Moderator notes']])];body();assert.equal(locked,false);passed++;console.log('PASS '+name);}
 
-test('Form payload, batch partial outcomes and retry receipts',()=>{
-  const sheet = new Sheet('station:Rock',[HEADERS,['A&B + café','Artist','approved',''],['Other','Artist','approved','']]);sheets.push(sheet);
-  const edit={id:'one',request_token:'a'.repeat(64),station:'Rock',station_status:'approved',original:{title:'A&B + café',artist:'Artist',status:'approved',youtube_id:''},changes:{title:'Fixed + %','artist':'Artist',youtube_id:''}};
-  const body={token:'secret',action:'edit_batch',edits:[edit,{...edit,id:'bad',request_token:'b'.repeat(64),original:{...edit.original,title:'Missing'}}]};
-  const send=()=>JSON.parse(context.doPost({parameter:{payload:JSON.stringify(body)}}).text);
-  const first=send();assert.equal(first.results[0].saved,true);assert.equal(first.results[1].saved,false);
-  assert.equal(sheet.rows[1][0],'Fixed + %');assert.equal(send().results[0].saved,true);
-  assert.equal(sheet.rows.length,3);assert.equal(locked,false);
-});
-
-test('Testing edits preserve status and notes and reject stale or duplicate rows',()=>{
-  const sheet=new Sheet('station:Rock',[['Notes',...HEADERS],['keep','Song','Artist','approved','']]);sheets.push(sheet);
-  const original={title:'Song',artist:'Artist',status:'approved',youtube_id:''};
-  const data={action:'edit',station:'Rock',station_status:'approved',original,changes:{title:'=Literal',artist:'New artist',youtube_id:'abcdefghijk'}};
-  assert.equal(post(data).ok,true);
-  assert.deepEqual(sheet.rows[1],['keep','=Literal','New artist','approved','abcdefghijk']);
-  assert.equal(post(data).conflict,true);
-  sheet.rows.push(['other','Song','Artist','approved',''],['duplicate','Song','Artist','approved','']);
-  assert.equal(post(data).conflict,true);
-  sheet.name='station:Renamed';assert.equal(post(data).conflict,true);
-});
-
-test('Authentication and nested station catalog, no spreadsheet IDs',()=>{
-  sheets.push(new Sheet('station:Rock',[HEADERS,['Song','Artist','approved','']]),new Sheet('pending:Country',[HEADERS]),new Sheet('metadata:Other',[['ignored']]));
-  assert.equal(post({token:'bad',action:'catalog'}).ok,false);
-  const c=catalog();assert.equal(c.schema_version,2);assert.equal(c.stations.length,2);
-  assert.equal(c.stations[0].name,'Rock');assert.equal(c.stations[0].songs[0].artist,'Artist');
-  assert(!JSON.stringify(c).includes('station_id'));assert(!JSON.stringify(c).includes('"id"'));
-});
-test('Moderator edits, deletes, clears, sorts, moves rows and renames/deletes tabs',()=>{
-  const rock=new Sheet('station:Rock',[HEADERS,['First','Artist','approved',''],['Second','Artist','approved','']]);sheets.push(rock);
-  rock.rows[1][0]='Edited';rock.rows[1][2]='rejected';assert.equal(catalog().stations[0].songs[0].title,'Edited');
-  assert.equal(catalog().stations[0].songs[0].status,'rejected');
-  rock.rows=[HEADERS,rock.rows[2],rock.rows[1]];assert.equal(catalog().stations[0].songs[0].title,'Second');
-  const country=new Sheet('station:Country',[HEADERS,rock.rows.pop()]);sheets.push(country);
-  assert.equal(catalog().stations[0].songs.length,1);assert.equal(catalog().stations[1].songs[0].title,'Edited');
-  rock.rows[1]=['','','',''];assert.equal(catalog().stations[0].songs.length,0);
-  country.name='station:Folk';assert.equal(catalog().stations[1].name,'Folk');
-  sheets=sheets.filter(s=>s!==country);assert.equal(catalog().stations.length,1);
-});
-test('Column reorder, extra notes, partial rows and blank status',()=>{
-  sheets.push(new Sheet('station:Rock',[['Notes','Status','Artist','Title'],['free text','','Artist','Song'],['','approved','','unfinished']]));
-  const c=catalog();assert.equal(c.stations[0].songs.length,1);assert.equal(c.stations[0].songs[0].status,'pending');assert.equal(c.warnings.length,1);
-  submit({id:token(1),type:'song',station:'Rock',title:'New',artist:'Other'});
-  assert.deepEqual(sheets[1].rows[3],['','pending','Other','New']);
-});
-test('Broken headers pause only that station, not updates to the others',()=>{
-  sheets.push(new Sheet('station:Rock',[['Broken'],['Old audio']]),new Sheet('station:Country',[HEADERS,['New','Artist','approved','']]));
-  const c=catalog();assert(c.ok);assert.equal(c.stations[0].songs.length,0);assert.equal(c.stations[1].songs.length,1);assert.equal(c.warnings.length,1);
-});
-test('New station approval is a tab rename; retries never resurrect deleted tabs',()=>{
-  const r={id:token(2),type:'station',name:'Jazz'};
-  assert.equal(submit(r).acknowledged.length,1);
-  const tab=ss.getSheetByName('pending:Jazz');assert(tab);assert.deepEqual(tab.rows[0],[...HEADERS,'Notes']);assert.equal(catalog().stations[0].status,'pending');
-  tab.name='station:Jazz';assert.equal(catalog().stations[0].status,'approved');
-  submit(r);assert(!ss.getSheetByName('pending:Jazz'));
-  sheets=sheets.filter(s=>s!==tab);submit(r);assert.equal(catalog().stations.length,0);
-});
-test('Pending-only literal song writes, receipts survive moderator row deletion',()=>{
-  const rock=new Sheet('station:Rock',[HEADERS]);sheets.push(rock);
-  const r={id:token(3),type:'song',station:'Rock',title:'=1+1',artist:'Artist',status:'approved'};
-  assert.equal(submit(r,r).acknowledged.length,2);assert.equal(rock.rows.length,2);
-  assert.equal(rock.rows[1][2],'pending');assert.equal(rock.raw[0][0],"'=1+1");
-  rock.rows.pop();submit(r);assert.equal(rock.rows.length,1);assert(ss.getSheetByName('metadata:Request receipts').hidden);
-});
-test('Stale song requests rejected without recreating a station; other requests proceed',()=>{
-  const result=submit({id:token(4),type:'song',station:'Deleted',title:'Song',artist:'Artist'},
-    {id:token(5),type:'station',name:'New'});
-  assert.equal(result.acknowledged.length,2);assert.equal(result.rejected.length,1);assert(!ss.getSheetByName('station:Deleted'));
-  assert(ss.getSheetByName('pending:New'));
-});
-test('Reject invalid station names and continue batch',()=>{
-  const result=submit({id:token(6),type:'station',name:'Bad/Name'},{id:token(7),type:'station',name:'Good'});
-  assert.equal(result.errors.length,1);assert.equal(result.acknowledged.length,1);
-});
-test('Legacy migration copies independent playlists without touching originals',()=>{
-  const oldStations=new Sheet('Stations',[['id','name','status','created_at'],['s1','Rock','approved','']]);
-  const oldSongs=new Sheet('Songs',[['id','station_id','title','artist','status','youtube_id','created_at'],['song1','s1','Song','Artist','approved','','']]);
-  sheets.push(oldStations,oldSongs);const before=JSON.stringify(oldSongs.rows);context.migrateLegacy();
-  assert.equal(JSON.stringify(oldSongs.rows),before);const rock=ss.getSheetByName('station:Rock');assert(rock);
-  assert.deepEqual(rock.rows,[[...HEADERS,'Notes'],['Song','Artist','approved','','']]);assert.equal(catalog().stations.length,1);
-  assert.throws(()=>context.migrateLegacy(),/already exists/);
-});
-
-
-test('Moderation decisions and notes round-trip, preserve other cells, and detect stale notes',()=>{
-  const sheet=new Sheet('station:Rock',[['Notes',...HEADERS,'Other'],['Old note','Song','Artist','pending','','keep']]);sheets.push(sheet);
-  const original={title:'Song',artist:'Artist',status:'pending',youtube_id:'',notes:'Old note'};
-  const data={action:'edit',station:'Rock',station_status:'approved',original,changes:{title:'Song',artist:'Artist',youtube_id:'',status:'rejected',notes:'=Literal reason'}};
-  assert.equal(post(data).moderation_version,1);
-  assert.deepEqual(sheet.rows[1],['=Literal reason','Song','Artist','rejected','','keep']);
-  assert.equal(catalog().stations[0].songs[0].notes,'=Literal reason');
-  data.original={...original,status:'rejected'};
-  assert.equal(post(data).conflict,true);
-  data.original.notes='=Literal reason';data.changes.notes='';data.changes.status='approved';
-  assert.equal(post(data).ok,true);assert.equal(sheet.rows[1][0],'');assert.equal(sheet.rows[1][3],'approved');
-});
-test('Missing optional Notes and YouTube headers are added without replacing other columns',()=>{
-  const sheet=new Sheet('station:Rock',[['Title','Artist','Status','Other'],['Song','Artist','pending','keep']]);sheets.push(sheet);
-  const data={action:'edit',station:'Rock',station_status:'approved',original:{title:'Song',artist:'Artist',status:'pending',youtube_id:'',notes:''},changes:{title:'Song',artist:'Artist',status:'approved',youtube_id:'abcdefghijk',notes:'Verified'}};
-  assert.equal(post(data).ok,true);
-  assert.deepEqual(sheet.rows[0],['Title','Artist','Status','Other','YouTube ID','Notes']);
-  assert.deepEqual(sheet.rows[1],['Song','Artist','approved','keep','abcdefghijk','Verified']);
-});
-
-console.log(passed+' Apps Script scenario tests passed.');
+const call=(action,args={},method='GET')=>JSON.parse(context[method==='GET'?'doGet':'doPost']({parameter:{q:JSON.stringify({action,...args})}}).text);
+const rock=new Sheet('station:Rock',[HEADERS,['Song','Artist','abcdefghijk','pending','Old note']]);sheets=[rock];
+assert.deepEqual(call('getStations').content,['station:Rock']);
+assert.equal(call('getStation',{stationId:'station:Rock'}).content[0].youtubeId,'abcdefghijk');
+let result=call('updateStation',{stationId:'station:Rock',state:{'Song:Artist':{title:'Renamed',artist:'Artist',youtubeId:'',status:'not-approved',notes:'New note'}}},'POST');
+assert.equal(result.ok,true);assert.equal(result.content[0].notes,'New note');assert.equal(result.content[0].youtubeId,'');assert.equal(result.content[0].status,'not-approved');
+result=call('updateStation',{stationId:'station:Rock',state:{'Renamed:Artist':{notes:''},'New:Artist':{title:'=Literal',artist:'Artist',notes:'=Note'}}},'POST');
+assert.equal(result.content[0].notes,'');assert.equal(rock.rows[2][0],'=Literal');assert.equal(rock.raw[0][0],"'=Literal");
+assert.equal(call('createStation',{stationId:'pending:Jazz'},'POST').ok,true);
+assert.deepEqual(sheets[1].rows[0],HEADERS);
+assert.equal(call('getStation',{stationId:'missing'}).ok,false);
+assert.equal(call('updateStation',{stationId:'station:Rock',state:null},'POST').ok,false);
+assert.equal(call('unknown').ok,false);
+console.log('Station API tests passed: reads, creation, edits, notes, clearing, literal values and errors.');

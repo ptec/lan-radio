@@ -1,255 +1,252 @@
-/* Moderation tabs: station:Rock (live), pending:Rock (awaiting approval).
- * Each tab is a complete playlist. No row IDs or cross-sheet references.
- * Set SHEETS_TOKEN in Script Properties, run setup, deploy as a Web app. */
-const SONG_HEADERS = ['Title', 'Artist', 'Status', 'YouTube ID', 'Notes'];
-const RECEIPTS = 'metadata:Request receipts';
-const RECEIPT_HEADERS = ['Request token', 'Outcome', 'Received at'];
+const STATUS_PENDING      = "pending"
+const STATUS_APPROVED     = "approved"
+const STATUS_NOT_APPROVED = "not-approved"
 
-function setup() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', ss.getId());
-  receiptSheet(ss);
-  ss.getSheets().filter(s => tabInfo(s)).forEach(formatStation);
-}
+const COLUMN_TITLE      = 1
+const COLUMN_ARTIST     = 2
+const COLUMN_YOUTUBE_ID = 3
+const COLUMN_STATUS     = 4
+const COLUMN_NOTES      = 5
 
-function onOpen() {
-  SpreadsheetApp.getUi().createMenu('Radio moderation')
-    .addItem('Format station tabs', 'setup').addToUi();
-}
+const STATUS = [
+  STATUS_PENDING ,
+  STATUS_APPROVED,
+  STATUS_NOT_APPROVED
+]
 
-function tabInfo(sheet) {
-  const match = /^(station|pending):(.+)$/.exec(sheet.getName());
-  if (!match || !match[2].trim()) return null;
-  return {name:match[2].trim(), status:match[1] === 'station' ? 'approved' : 'pending'};
-}
+// GET
+const ACTION_GET_STATIONS = "getStations"
+const ACTION_GET_STATION  = "getStation"
 
-function columns(sheet) {
-  const values = sheet.getDataRange().getDisplayValues();
-  const headers = (values[0] || []).map(v => String(v).trim().toLowerCase());
-  const positions = SONG_HEADERS.map(h => headers.indexOf(h.toLowerCase()));
-  if (positions.slice(0,3).some(i => i < 0) ||
-      SONG_HEADERS.some(h => headers.filter(v => v === h.toLowerCase()).length > 1)) {
-    throw Error('Use unique Title, Artist, Status headers in row 1');
-  }
-  return {values, positions};
-}
+// POST
+const ACTION_CREATE_STATION = "createStation"
+const ACTION_UPDATE_STATION = "updateStation"
 
-function formatStation(sheet) {
-  if (!sheet.getLastRow()) sheet.appendRow(SONG_HEADERS);
-  const {positions} = columns(sheet);
-  sheet.setFrozenRows(1);
-  sheet.getRange(1,1,1,sheet.getLastColumn()).setFontWeight('bold');
-  sheet.getRange(2,positions[2]+1,Math.max(1,sheet.getMaxRows()-1),1).setDataValidation(
-    SpreadsheetApp.newDataValidation().requireValueInList(['pending','approved','rejected'],true).setAllowInvalid(false).build());
-  sheet.autoResizeColumns(1,sheet.getLastColumn());
-}
+function doGet(e) {
+  try {
+    const q = JSON.parse(e.parameter.q)
 
-function receiptSheet(ss) {
-  let sheet = ss.getSheetByName(RECEIPTS);
-  if (!sheet) {
-    sheet = ss.insertSheet(RECEIPTS);
-    sheet.appendRow(RECEIPT_HEADERS);
-    sheet.hideSheet();
-  }
-  const header = sheet.getDataRange().getDisplayValues()[0];
-  if (JSON.stringify(header) !== JSON.stringify(RECEIPT_HEADERS)) throw Error('Request receipt headers were changed');
-  return sheet;
-}
-
-function catalog(ss) {
-  const stations = [], warnings = [];
-  for (const sheet of ss.getSheets()) {
-    const info = tabInfo(sheet);
-    if (!info) continue;
-    const songs = [];
-    try {
-      const {values, positions} = columns(sheet);
-      values.slice(1).forEach((row,index) => {
-        const [title,artist,status,video,notes] = positions.map(i => i < 0 ? '' : String(row[i] || '').trim());
-        if (!title && !artist && !status && !video) return;
-        if (!title || !artist) {
-          warnings.push(sheet.getName() + ' row ' + (index+2) + ': incomplete song; skipped');
-          return;
-        }
-        songs.push({title,artist,status:status.toLowerCase() || 'pending',youtube_id:video,notes});
-      });
-    } catch (err) {
-      warnings.push(sheet.getName() + ': ' + err.message + '; playlist paused');
+    switch (q.action) {
+      case ACTION_GET_STATIONS: return getStations(q);
+      case ACTION_GET_STATION : return getStation (q);
     }
-    stations.push({...info,songs});
+
+    throw new Error(`[doGet] Endpoint for action '${q.action}' is not defined.`);
+  } catch (e) {
+    return error(e.message)
   }
-  const unique = new Map();
-  for (const station of stations) {
-    const old = unique.get(station.name);
-    if (old) warnings.push('Duplicate station name: ' + station.name + '; using the approved tab if present');
-    if (!old || station.status === 'approved') unique.set(station.name,station);
-  }
-  return {ok:true,schema_version:2,stations:[...unique.values()],warnings};
 }
-
-function field(r,key) {
-  if (typeof r[key] !== 'string' || !r[key].trim() || r[key].length > 200) throw Error('Invalid ' + key);
-  return r[key].trim();
-}
-
-function stationName(value) {
-  if (!value || value.length > 91 || /[\[\]*?:/\\]/.test(value)) throw Error('Station names: 1â€“91 characters, no [ ] * ? : / or backslash');
-  return value;
-}
-
-function submitOne(ss,r) {
-  if (r.type === 'station') {
-    const name = stationName(field(r,'name'));
-    if (ss.getSheetByName('station:'+name) || ss.getSheetByName('pending:'+name)) return 'already exists';
-    formatStation(ss.insertSheet('pending:'+name));
-    return 'submitted';
-  }
-  if (r.type !== 'song') throw Error('Invalid request type');
-  const name = field(r,'station'), title = field(r,'title'), artist = field(r,'artist');
-  const sheet = ss.getSheets().find(s => {const info=tabInfo(s); return info && info.status==='approved' && info.name===name;});
-  // A stale request must never recreate a tab deleted/renamed by a moderator.
-  if (!sheet) return 'rejected: station was removed, renamed, or is not approved';
-  const {values,positions} = columns(sheet);
-  if (values.slice(1).some(row => String(row[positions[0]]||'').trim().toLowerCase()===title.toLowerCase() &&
-      String(row[positions[1]]||'').trim().toLowerCase()===artist.toLowerCase())) return 'already exists';
-  const row = new Array(sheet.getLastColumn()).fill('');
-  row[positions[0]] = "'" + title;
-  row[positions[1]] = "'" + artist;
-  row[positions[2]] = 'pending';
-  sheet.appendRow(row);
-  return 'submitted';
-}
-
-function json(data) {
-  return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
-}
-
-function editSong(ss, data, cache) {
-  const prefix = data.station_status === 'approved' ? 'station:' : data.station_status === 'pending' ? 'pending:' : null;
-  const sheet = prefix && ss.getSheetByName(prefix + field(data, 'station'));
-  const conflict = () => ({ok:true,conflict:true,error:'The spreadsheet row changed, was removed, or is duplicated. Sync and reload before editing.'});
-  if (!sheet) return conflict();
-  const original = data.original, changes = data.changes;
-  if (!original || !changes) throw Error('Missing song edit');
-  const title = field(changes,'title'), artist = field(changes,'artist');
-  const video = changes.youtube_id;
-  const status = changes.status === undefined ? original.status : changes.status;
-  if (!['approved','pending','rejected'].includes(status)) throw Error('Invalid moderation status');
-  if (changes.notes !== undefined && (typeof changes.notes !== 'string' || changes.notes.length > 2000)) throw Error('Invalid notes');
-  if (typeof video !== 'string' || (video && !/^[A-Za-z0-9_-]{11}$/.test(video))) throw Error('Invalid YouTube ID');
-  const snapshot = cache ? (cache[sheet.getName()] || (cache[sheet.getName()] = columns(sheet))) : columns(sheet);
-  const {values,positions} = snapshot;
-  const matches = [];
-  values.slice(1).forEach((row,index) => {
-    const actual = positions.map(i => i < 0 ? '' : String(row[i] || '').trim());
-    actual[2] = actual[2].toLowerCase() || 'pending';
-    if (['title','artist','status','youtube_id'].every((key,i) => actual[i] === original[key]) && (original.notes === undefined || actual[4] === original.notes)) matches.push(index+2);
-  });
-  if (matches.length !== 1) return conflict();
-  let videoColumn = positions[3];
-  if (videoColumn < 0) {
-    videoColumn = sheet.getLastColumn();
-    sheet.getRange(1, videoColumn+1).setValue('YouTube ID');
-    positions[3] = videoColumn;
-  }
-  const writes = [[positions[0],title],[positions[1],artist],[videoColumn,video],[positions[2],status]];
-  if (changes.notes !== undefined) {
-    if (positions[4] < 0) {
-      positions[4] = sheet.getLastColumn();
-      sheet.getRange(1,positions[4]+1).setValue('Notes');
-    }
-    writes.push([positions[4],changes.notes.trim()]);
-  }
-  // Literal values prevent formulas; unrelated columns are preserved.
-  writes.forEach(([col,value]) => sheet.getRange(matches[0],col+1).setValue("'" + value));
-  writes.forEach(([col,value]) => values[matches[0]-1][col] = value);
-  if (!cache) SpreadsheetApp.flush();
-  return {ok:true,moderation_version:1};
-}
-
-function doGet() { return json({ok:false,error:'Use authenticated POST'}); }
 
 function doPost(e) {
-  const lock = LockService.getScriptLock();
   try {
-    // Apps Script decodes form parameters once; do not decode JSON again.
-    const data = JSON.parse(e.parameter && e.parameter.payload !== undefined ? e.parameter.payload : e.postData.contents);
-    const props = PropertiesService.getScriptProperties(), token=props.getProperty('SHEETS_TOKEN');
-    if (!token || data.token!==token) return json({ok:false,error:'Unauthorized'});
-    lock.waitLock(25000);
-    const ss = SpreadsheetApp.openById(props.getProperty('SPREADSHEET_ID'));
-    if (data.action==='catalog') return json(catalog(ss));
-    if (data.action==='edit') return json(editSong(ss,data));
-    if (data.action==='edit_batch') {
-      if (!Array.isArray(data.edits) || !data.edits.length || data.edits.length > 50) throw Error('Expected 1 to 50 edits');
-      const cache = {}, results = [];
-      const receipts = receiptSheet(ss);
-      const seen = new Map(receipts.getDataRange().getDisplayValues().slice(1).map(r=>[r[0],r[1]]));
-      for (const edit of data.edits) {
-        try {
-          if (!edit || typeof edit.request_token !== 'string' || !/^[0-9a-f]{64}$/.test(edit.request_token)) throw Error('Invalid edit token');
-          let result;
-          if (seen.get(edit.request_token) === 'edited:v1' || (seen.get(edit.request_token) === 'edited' && ['status','notes'].every(f => edit.changes[f] === undefined || edit.changes[f] === (edit.original[f] || '')))) result = {ok:true};
-          else {
-            result = editSong(ss, edit, cache);
-            if (!result.conflict) {
-              receipts.appendRow([edit.request_token,'edited:v1',new Date().toISOString()]);
-              seen.set(edit.request_token,'edited:v1');
-            }
-          }
-          results.push({id:edit.id,saved:!result.conflict,moderation_version:1,error:result.error || null});
-        } catch(err) { results.push({id:edit && edit.id,saved:false,error:String(err.message)}); }
-      }
-      SpreadsheetApp.flush();
-      return json({ok:true,results});
+    const q = JSON.parse(e.parameter.q)
+
+    switch (q.action) {
+      case ACTION_CREATE_STATION: return createStation(q);
+      case ACTION_UPDATE_STATION: return updateStation(q);
     }
-    if (data.action!=='submit' || !Array.isArray(data.requests) || data.requests.length>100) throw Error('Invalid request');
-    const receipts = receiptSheet(ss);
-    // Delivery tokens are not pointers to rows/tabs. Retain after deletion.
-    const seen = new Map(receipts.getDataRange().getDisplayValues().slice(1).map(r=>[r[0],r[1]]));
-    const acknowledged=[], rejected=[], errors=[];
-    for (const r of data.requests) {
-      try {
-        if (!r || typeof r.id!=='string' || !/^[0-9a-f-]{36}$/.test(r.id)) throw Error('Invalid request token');
-        let outcome = seen.get(r.id);
-        if (!outcome) {
-          outcome = submitOne(ss,r);
-          receipts.appendRow([r.id,outcome,new Date().toISOString()]);
-          SpreadsheetApp.flush();
-          seen.set(r.id,outcome);
-        }
-        acknowledged.push(r.id);
-        if (outcome.startsWith('rejected:')) rejected.push({id:r.id,error:outcome});
-      } catch (err) { errors.push({id:r && r.id,error:String(err.message)}); }
-    }
-    return json({ok:true,acknowledged,rejected,errors});
-  } catch (err) { return json({ok:false,error:String(err.message)}); }
-  finally { if (lock.hasLock()) lock.releaseLock(); }
+
+    throw new Error(`[doPost] Endpoint for action '${q.action}' is not defined.`);
+
+  } catch(e) {
+    return error(e.message)
+  }
 }
 
-/* Optional conversion of the old Stations/Songs layout. Creates independent
- * tabs; leaves originals intact. Refuses to overwrite existing targets. */
-function migrateLegacy() {
-  const ss=SpreadsheetApp.getActiveSpreadsheet();
-  function read(name) {
-    const sheet=ss.getSheetByName(name);
-    if (!sheet) throw Error('Missing legacy '+name+' tab');
-    const values=sheet.getDataRange().getDisplayValues(), headers=values.shift();
-    return values.filter(r=>r[0]).map(r=>Object.fromEntries(headers.map((h,i)=>[h,String(r[i]||'').trim()])));
+function getStations(q) {
+  const sheets = SpreadsheetApp.getActiveSpreadsheet().getSheets()
+  const ids    = sheets.map(sheet => sheet.getName())
+  return ok(ids)
+}
+
+function getStation ({
+  stationId
+}) {
+  if (typeof stationId !== "string")
+    throw new Error(`[getStation] Type of stationId is '${typeof stationId}', expected 'string'.`)
+
+    const sheet = getSheet(stationId)
+
+    if (!sheet)
+      throw new Error(`[getStation] Station with id '${stationId}' does not exist.`)
+
+    const rows    = sheet.getDataRange().getValues()
+    const headers = rows.shift() // throw away headers
+    const entries = rows.map(row => ({
+      title    : String(row[COLUMN_TITLE      - 1] ?? '').trim(),
+      artist   : String(row[COLUMN_ARTIST     - 1] ?? '').trim(),
+      youtubeId: String(row[COLUMN_YOUTUBE_ID - 1] ?? '').trim(),
+      status   : String(row[COLUMN_STATUS     - 1] ?? '').trim(),
+      notes    : String(row[COLUMN_NOTES      - 1] ?? '').trim()
+    }))
+
+    return ok(entries)
+}
+
+function createStation({
+  stationId
+}) {
+  if (typeof stationId !== "string")
+    throw new Error(`[createStation] Expected 'stationName' to be of type 'string', received '${typeof stationId}' instead.`)
+
+  if(getSheet(stationId))
+    throw new Error(`[createStation] Station with id '${stationId}' already exists.`)
+
+  const sheet = newSheet(stationId)
+
+  sheet.appendRow([
+    "Title" ,
+    "Artist",
+    "YouTube Id",
+    "Status",
+    "Notes" ,
+  ])
+
+  return getStations()
+}
+
+function updateStation({
+  stationId,
+  state
+}) {
+  if (typeof stationId !== "string")
+    throw new Error(`[updateStation] Expected 'stationId' to be of type 'string', received '${typeof stationId}' instead.`)
+
+  if (!state || typeof state !== "object" || Array.isArray(state))
+    throw new Error(`[updateStation] Expected 'state' to be of type 'object', received '${typeof state}' instead.`)
+
+  const sheet = getSheet(stationId)
+
+  if (!sheet)
+    throw new Error(`[updateStation] Station with id '${stationId}' does not exist.`)
+
+  const rows    = sheet.getDataRange().getValues()
+  const headers = rows.shift()
+  const entries = rows.map(row => ({
+    title    : String(row[COLUMN_TITLE      - 1] ?? '').trim(),
+    artist   : String(row[COLUMN_ARTIST     - 1] ?? '').trim(),
+    youtubeId: String(row[COLUMN_YOUTUBE_ID - 1] ?? '').trim(),
+    status   : String(row[COLUMN_STATUS     - 1] ?? '').trim(),
+    notes    : String(row[COLUMN_NOTES      - 1] ?? '').trim()
+  }))
+
+  function keyOf({title, artist}) {
+    return `${title}:${artist}`
   }
-  const stations=read('Stations'), songs=read('Songs'), names=new Set();
-  const planned=stations.map(s=>{
-    const prefix=s.status.toLowerCase()==='approved'?'station:':s.status.toLowerCase()==='rejected'?'archived:':'pending:';
-    const name=prefix+stationName(s.name);
-    if (names.has(name) || ss.getSheetByName(name)) throw Error('Target already exists: '+name);
-    names.add(name);
-    return {name,songs:songs.filter(song=>song.station_id===s.id)};
-  });
-  if (songs.some(song=>!stations.some(s=>s.id===song.station_id))) throw Error('Legacy song has an unknown station; fix it before migration');
-  for (const plan of planned) {
-    const sheet=ss.insertSheet(plan.name);
-    formatStation(sheet);
-    for (const song of plan.songs) sheet.appendRow(["'"+song.title,"'"+song.artist,song.status||'pending',"'"+song.youtube_id,"'"+(song.notes||'')]);
+
+  for (const [key, value] of Object.entries(state)) {
+    let {title, artist, youtubeId, status, notes} = value
+
+    // normalize fields
+    if (title    ) title     = String(title    ).trim()
+    if (artist   ) artist    = String(artist   ).trim()
+    if (youtubeId) youtubeId = String(youtubeId).trim()
+    if (status   ) status    = String(status   ).trim()
+    if (notes    ) notes     = String(notes    ).trim()
+
+    const row   = entries.findIndex(e => key === keyOf(e))
+    const entry = entries[row]
+
+    if (row >= 0) {
+      // merge existing
+
+      // try modify title/artist
+      if (
+        (title  && title  !== entry.title ) ||
+        (artist && artist !== entry.artist)
+      ) {
+        const newKey = keyOf({
+          title : title  || entry.title ,
+          artist: artist || entry.artist
+        })
+
+        // rename only if there is no collision
+        if(!entries.find(e => newKey === keyOf(e))) {
+          if (title ) {
+            // update the in-memory map
+            entry.title = title;
+            // update the sheet
+            sheet.getRange(row + 2, COLUMN_TITLE ).setValue("'" + title)
+          }
+
+          if (artist) {
+            // update the in-memory map
+            entry.artist = artist;
+            // update the sheet
+            sheet.getRange(row + 2, COLUMN_ARTIST).setValue("'" + artist)
+          }
+        }
+      }
+
+      // update the youtubeId if it differs
+      if (youtubeId !== undefined && youtubeId !== entry.youtubeId) {
+        // update the in-memory map
+        entry.youtubeId = youtubeId;
+        // update the sheet
+        sheet.getRange(row + 2, COLUMN_YOUTUBE_ID).setValue("'" + youtubeId)
+      }
+
+      // update the status if it differs
+      if (STATUS.includes(status) && status !== entry.status) {
+        // update the in-memory map
+        entry.status = status;
+        // update the sheet
+        sheet.getRange(row + 2, COLUMN_STATUS).setValue(status)
+      }
+
+      // update the notes if it differs
+      if (notes !== undefined && notes !== entry.notes) {
+        // update the in-memory map
+        entry.notes = notes;
+        // update the sheet
+        sheet.getRange(row + 2, COLUMN_NOTES).setValue("'" + notes)
+      }
+    } else        {
+      // create new
+
+      title     = title     || ""
+      artist    = artist    || ""
+      youtubeId = youtubeId || ""
+      status    = status    || STATUS_PENDING
+      notes     = notes     || ""
+
+      const newKey = keyOf({title, artist})
+
+      // append entry only if there is no collision
+      if(!entries.find(e => newKey === keyOf(e))) {
+        // update the in-memory map
+        entries.push({title, artist, youtubeId, status, notes})
+        // update the sheet
+        sheet.appendRow(["'" + title, "'" + artist, "'" + youtubeId, status, "'" + notes])
+      }
+    }
   }
-  setup();
+
+  return ok(entries)
+}
+
+function newSheet(name) {
+  const  sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(name)
+  return sheet
+}
+
+function getSheet(name) {
+  const  sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name)
+  return sheet
+}
+
+function ok(content) {
+  return ContentService.createTextOutput()
+    .setContent (JSON.stringify({
+      ok: true, content
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function error(error) {
+  return ContentService.createTextOutput()
+    .setContent(JSON.stringify({
+      ok: false, error
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
 }

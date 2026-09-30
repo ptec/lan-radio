@@ -50,11 +50,11 @@ class RadioTests(unittest.TestCase):
         item = self.store.enqueue(dict(type='station', name='Jazz'))
         reopened = Store(self.temp.name)
         sync = SheetSync(reopened, None, 'https://example.test', 'secret')
-        with patch.object(sync,'call',side_effect=TimeoutError):
+        with patch.object(sync,'submit_requests',side_effect=TimeoutError):
             with self.assertRaises(TimeoutError):
                 sync.push()
         self.assertEqual(reopened.pending()[0]['id'],item['id'])
-        with patch.object(sync,'call',return_value={'acknowledged':[item['id'],'unknown']}):
+        with patch.object(sync,'submit_requests',return_value={'acknowledged':[item['id'],'unknown']}):
             sync.push()
         self.assertEqual(reopened.pending(), [])
 
@@ -216,7 +216,7 @@ class RadioTests(unittest.TestCase):
         broadcasts = SimpleNamespace(refresh=lambda:None)
         sync = SheetSync(self.store,broadcasts,'url','secret')
         data = dict(schema_version=2,stations=[dict(name='Rock',status='approved',songs=[])],warnings=['Rock: incomplete row'])
-        with patch.object(sync,'call',return_value=data):
+        with patch.object(sync,'load_catalog',return_value=data):
             sync.pull()
         self.assertEqual(self.store.snapshot()['stations'][0]['name'],'Rock')
         self.assertEqual(sync.warnings,data['warnings'])
@@ -225,7 +225,7 @@ class RadioTests(unittest.TestCase):
     def test_stale_request_terminal_rejection_is_preserved_locally(self):
         item = self.store.enqueue(dict(type='song',station='Removed',title='A',artist='B'))
         sync = SheetSync(self.store,None,'url','secret')
-        with patch.object(sync,'call',return_value=dict(acknowledged=[item['id']],rejected=[dict(id=item['id'],error='Station deleted')])):
+        with patch.object(sync,'submit_requests',return_value=dict(acknowledged=[item['id']],rejected=[dict(id=item['id'],error='Station deleted')])):
             sync.push()
         self.assertEqual(self.store.pending(),[])
         self.assertEqual(self.store.diagnostics()['rejected_requests'],1)
@@ -233,7 +233,7 @@ class RadioTests(unittest.TestCase):
     def test_old_outbox_station_reference_translated_before_upload(self):
         item=self.store.enqueue(dict(type='song',station_id='station1',title='A',artist='B'))
         sync=SheetSync(self.store,None,'url','secret')
-        with patch.object(sync,'call',return_value=dict(acknowledged=[item['id']])) as call:
+        with patch.object(sync,'submit_requests',return_value=dict(acknowledged=[item['id']])) as call:
             sync.push()
         submitted=call.call_args.kwargs['requests'][0]
         self.assertEqual(submitted['station'],'Test Station')
@@ -242,11 +242,11 @@ class RadioTests(unittest.TestCase):
     def test_failed_legacy_upload_keeps_name_after_new_catalog_replaces_ids(self):
         item=self.store.enqueue(dict(type='song',station_id='station1',title='A',artist='B'))
         sync=SheetSync(self.store,None,'url','secret')
-        with patch.object(sync,'call',side_effect=TimeoutError):
+        with patch.object(sync,'submit_requests',side_effect=TimeoutError):
             with self.assertRaises(TimeoutError):
                 sync.push()
         self.store.replace(normalize_catalog(dict(schema_version=2,stations=[])))
-        with patch.object(sync,'call',return_value=dict(acknowledged=[item['id']])) as call:
+        with patch.object(sync,'submit_requests',return_value=dict(acknowledged=[item['id']])) as call:
             sync.push()
         self.assertEqual(call.call_args.kwargs['requests'][0]['station'],'Test Station')
 

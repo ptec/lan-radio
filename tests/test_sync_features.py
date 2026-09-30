@@ -2,11 +2,21 @@ import tempfile
 import threading
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, Mock
+from contextlib import contextmanager
 
 from radio.store import Store
 from radio.sync import SheetSync
 from radio.web import create_app
+
+
+@contextmanager
+def mock_sync_operations(sync, side_effect=None):
+    # Track scheduling order without coupling tests to a production dispatcher.
+    calls = Mock(side_effect=side_effect)
+    with patch.object(sync, 'load_catalog', side_effect=lambda: calls(action='catalog')), \
+         patch.object(sync, 'submit_requests', side_effect=lambda requests: calls(action='submit', requests=requests)):
+        yield calls
 
 
 class SyncFeatures(unittest.TestCase):
@@ -32,7 +42,7 @@ class SyncFeatures(unittest.TestCase):
         return self.catalog
 
     def test_idle_never_calls_sheets_including_startup(self):
-        with patch.object(self.sync, 'call') as call:
+        with mock_sync_operations(self.sync) as call:
             for now in (1000, 2000, 1000000):
                 self.time.return_value = now
                 self.sync.tick()
@@ -44,12 +54,12 @@ class SyncFeatures(unittest.TestCase):
         self.assertEqual(self.sync.status()['next_sync_at'], 1300)
         self.time.return_value = 1200
         self.add_request()
-        with patch.object(self.sync, 'call', side_effect=self.answer) as call:
+        with mock_sync_operations(self.sync, side_effect=self.answer) as call:
             self.sync.tick()
             call.assert_not_called()
             self.time.return_value = 1300
             self.sync.tick()
-            self.assertEqual([c.kwargs['action'] for c in call.call_args_list], ['submit', 'catalog'])
+            self.assertEqual([c.kwargs['action'] for c in call.call_args_list], ['submit'])
             self.assertEqual(self.store.pending(), [])
             call.reset_mock()
             self.time.return_value = 100000
@@ -65,7 +75,7 @@ class SyncFeatures(unittest.TestCase):
     def test_manual_sync_works_without_outbound_requests_and_coalesces(self):
         self.assertEqual(self.client.post('/api/sync', json={}).status_code, 202)
         self.assertEqual(self.client.post('/api/sync', json={}).status_code, 202)
-        with patch.object(self.sync, 'call', side_effect=self.answer) as call:
+        with mock_sync_operations(self.sync, side_effect=self.answer) as call:
             self.sync.tick()
             self.assertEqual(call.call_count, 1)
             self.assertEqual(call.call_args.kwargs['action'], 'catalog')
@@ -77,7 +87,7 @@ class SyncFeatures(unittest.TestCase):
         for _ in range(105):
             self.add_request()
         self.sync.request_manual()
-        with patch.object(self.sync, 'call', side_effect=self.answer) as call:
+        with mock_sync_operations(self.sync, side_effect=self.answer) as call:
             self.sync.tick()
             self.assertEqual([c.kwargs['action'] for c in call.call_args_list], ['submit', 'submit', 'catalog'])
         self.assertEqual(self.store.pending(), [])
@@ -89,7 +99,7 @@ class SyncFeatures(unittest.TestCase):
             if body['action'] == 'submit':
                 raise TimeoutError()
             return self.catalog
-        with patch.object(self.sync, 'call', side_effect=fail_upload) as call:
+        with mock_sync_operations(self.sync, side_effect=fail_upload) as call:
             self.sync.tick()
             self.assertEqual(call.call_count, 2)
             self.assertEqual(len(self.store.pending()), 1)
@@ -99,11 +109,11 @@ class SyncFeatures(unittest.TestCase):
             call.assert_not_called()
             self.time.return_value = 1300
             self.sync.tick()
-            self.assertEqual(call.call_count, 2)
+            self.assertEqual(call.call_count, 1)
 
     def test_failed_pull_with_empty_queue_requires_manual_retry(self):
         self.sync.request_manual()
-        with patch.object(self.sync, 'call', side_effect=TimeoutError()) as call:
+        with mock_sync_operations(self.sync, side_effect=TimeoutError()) as call:
             self.sync.tick()
             self.assertIn('Catalog sync failed', self.sync.error)
             self.time.return_value = 100000

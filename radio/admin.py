@@ -1,7 +1,5 @@
 """Password-protected maintenance routes; deliberately absent from navigation."""
 import hmac
-import hashlib
-import json
 import os
 import re
 import secrets
@@ -15,7 +13,7 @@ from .store import media_key
 from .review import MetadataReview, review_key
 
 
-def register_testing(app, store, broadcasts, sync, search, stop):
+def register_admin(app, store, broadcasts, sync, search, stop):
     started = time.monotonic()
     password = os.getenv('TESTING_PASSWORD', '')
     signer = URLSafeTimedSerializer(secrets.token_hex(32), salt='radio-debug')
@@ -43,7 +41,7 @@ def register_testing(app, store, broadcasts, sync, search, stop):
                 response.headers['Cache-Control'] = 'no-store'
                 return response
             error = 'Incorrect password.'
-        return render_template('debug-login.html', error=error), 401 if error else 200
+        return render_template('admin-login.html', error=error), 401 if error else 200
 
     @app.after_request
     def private_debug_response(response):
@@ -72,7 +70,7 @@ def register_testing(app, store, broadcasts, sync, search, stop):
     @app.get('/admin')
     @protected
     def testing_page():
-        return render_template('testing.html')
+        return render_template('admin.html')
 
     @app.post('/api/admin/cache')
     @protected
@@ -142,7 +140,7 @@ def register_testing(app, store, broadcasts, sync, search, stop):
         with sync.lock:
             if sync.running:
                 return jsonify(error='A sync is running. Use Sync with Sheets when it finishes.'), 409
-            if not sync.url or not sync.token:
+            if not sync.url:
                 return jsonify(error='Google Sheets is not configured'), 503
             try:
                 sync.pull()
@@ -160,7 +158,7 @@ def register_testing(app, store, broadcasts, sync, search, stop):
         with sync.lock:
             if sync.running:
                 return jsonify(error='A sync is running. Wait until it finishes.'), 409
-            if not sync.url or not sync.token:
+            if not sync.url:
                 return jsonify(error='Google Sheets is not configured'), 503
             catalog = store.snapshot()
             songs = {s['id']:s for s in catalog['songs']}
@@ -190,17 +188,13 @@ def register_testing(app, store, broadcasts, sync, search, stop):
                     results.append(dict(id=key, saved=False, error='Invalid moderation status or notes (maximum 2000 characters)'))
                     continue
                 station = stations[song['station_id']]
-                request_id = edit.get('request_id', '')
-                if not isinstance(request_id, str) or len(request_id) > 200:
-                    return jsonify(error='Invalid edit request ID'), 400
-                item = dict(id=key,request_id=request_id,station=station['name'],station_status=station['status'],original=original,
+                item = dict(id=key,station=station['name'],station_status=station['status'],original=original,
                             changes={f:changes.get(f,'').strip() for f in ('title','artist','youtube_id')})
                 item['changes'].update(status=changes.get('status', song['status']), notes=changes.get('notes', song.get('notes', '')).strip())
-                item['request_token'] = hashlib.sha256(json.dumps(item,sort_keys=True).encode()).hexdigest()
                 outgoing.append(item)
             if outgoing:
                 try:
-                    response = sync.call(action='edit_batch', edits=outgoing)
+                    response = sync.save_edits(edits=outgoing)
                     replies = {r['id']:r for r in response.get('results',[]) if isinstance(r,dict) and isinstance(r.get('id'),str)}
                     for item in outgoing:
                         reply = replies.get(item['id'], {})
@@ -234,7 +228,7 @@ def register_testing(app, store, broadcasts, sync, search, stop):
         with sync.lock:
             if sync.running:
                 return jsonify(error='A sync is running. Try again when it finishes.'), 409
-            if not sync.url or not sync.token:
+            if not sync.url:
                 return jsonify(error='Google Sheets is not configured'), 503
             catalog = store.snapshot()
             song = next((s for s in catalog['songs'] if s['id'] == body.get('id')), None)
@@ -247,7 +241,7 @@ def register_testing(app, store, broadcasts, sync, search, stop):
             if not isinstance(supplied, dict) or dict(supplied, notes=supplied.get('notes', '')) != original:
                 return jsonify(error='Song changed. Reload before editing.'), 409
             try:
-                result = sync.call(action='edit', station=station['name'], station_status=station['status'],
+                result = sync.save_edit(station=station['name'], station_status=station['status'],
                                    original=original, changes=changes)
                 if any(f in changes and changes[f] != original[f] for f in ('status', 'notes')) and result.get('moderation_version') != 1:
                     return jsonify(error='Deploy the updated Code.gs web app before saving moderation or notes.'), 502
@@ -255,10 +249,4 @@ def register_testing(app, store, broadcasts, sync, search, stop):
                     return jsonify(error=result.get('error', 'Spreadsheet row changed. Sync and reload.')), 409
             except Exception as exc:
                 return jsonify(error=sync.safe_error(exc) + ' Reload and sync before retrying; delivery may have succeeded.'), 502
-            if body.get('defer_refresh') is True:
-                return jsonify(message='Saved to Sheets. Catalog refresh pending.')
-            try:
-                sync.pull()
-            except Exception as exc:
-                return jsonify(message='Saved to Sheets, but catalog refresh failed. Use Sync now.', warning=sync.safe_error(exc))
-        return jsonify(message='Saved to Sheets and refreshed. Changed recordings will download through the normal queue.')
+        return jsonify(message='Saved to Sheets and local catalog updated. Changed recordings will download through the normal queue.')

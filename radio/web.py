@@ -8,6 +8,7 @@ from flask import Flask, Response, jsonify, render_template, request
 import requests
 from .search import SongSearch
 from .store import media_key
+from .version import application_version
 
 
 # Cached MP3s are normalized to 128 kbps. Accumulate complete frames for
@@ -41,13 +42,33 @@ def buffered_audio(listener, stop):
 
 def create_app(store, broadcasts, sync, stop, max_listeners=24):
     app = Flask(__name__)
+    # Freeze the version for this process. An open page keeps its rendered
+    # label, even when a newer server starts or its catalog changes.
+    app.config['APP_VERSION'] = application_version()
+
+    @app.context_processor
+    def version_context():
+        return dict(app_version=app.config['APP_VERSION'])
+
+    @app.url_defaults
+    def version_static_assets(endpoint, values):
+        if endpoint == 'static':
+            values.setdefault('v', app.config['APP_VERSION'])
+
+    @app.after_request
+    def revalidate_pages(response):
+        # Reloading should retrieve current HTML, with the current asset URLs.
+        if response.mimetype == 'text/html' and 'Cache-Control' not in response.headers:
+            response.headers['Cache-Control'] = 'no-cache'
+        return response
+
     app.config['MAX_CONTENT_LENGTH'] = 262144
     slots = threading.BoundedSemaphore(max_listeners)
     rate_lock = threading.Lock()
     requests_by_ip = defaultdict(deque)
     song_search = SongSearch()
-    from .testing import register_testing
-    register_testing(app, store, broadcasts, sync, song_search, stop)
+    from .admin import register_admin
+    register_admin(app, store, broadcasts, sync, song_search, stop)
 
     @app.get('/api/song-suggestions')
     def song_suggestions():
@@ -153,8 +174,8 @@ def create_app(store, broadcasts, sync, stop, max_listeners=24):
         clean = {f: body[f].strip() for f in fields}
         clean['type'] = body['type']
         if clean['type'] == 'station':
-            if len(clean['name']) > 91 or re.search(r'[\[\]*?:/\\]', clean['name']):
-                return jsonify(error='Station names: maximum 91 characters; no [ ] * ? : / or backslash'), 400
+            if len(clean['name']) > 100 or re.search(r'[\[\]*?:/\\]', clean['name']):
+                return jsonify(error='Station names: maximum 100 characters; no [ ] * ? : / or backslash'), 400
         else:
             names = {s['id']: s['name'] for s in store.snapshot()['stations'] if s['status'].lower() == 'approved'}
             if clean['station_id'] not in names:
@@ -175,7 +196,7 @@ def create_app(store, broadcasts, sync, stop, max_listeners=24):
             item = store.enqueue(clean)
         except ValueError as exc:
             return jsonify(error=str(exc)), 503
-        return jsonify(id=item['id'], status='pending', message='Saved locally; awaiting Sheets sync and administrator approval'), 202
+        return jsonify(id=item['id'], status='pending', message='Saved locally; awaiting Sheets sync' if clean['type'] == 'station' else 'Saved locally; awaiting Sheets sync and administrator approval'), 202
 
     @app.get('/stream/<station_id>')
     def stream(station_id):

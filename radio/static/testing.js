@@ -65,18 +65,13 @@
         const batch = entries.slice(offset, offset + 50);
         message(`Saving batch ${Math.floor(offset/50)+1} of ${Math.ceil(entries.length/50)} (${batch.length} songs)...`);
         try {
-          const result = await api('/api/admin/edits', {edits:batch.map(([id,draft]) => ({id,request_id:draft.requestId,original:draft.original,changes:draft.values}))});
+          const result = await api('/api/admin/edits', {edits:batch.map(([id,draft]) => ({id,original:draft.original,changes:draft.values}))});
           for (const [id,draft] of batch) {
             const reply = result.results.find(item => item.id === id);
             if (reply?.saved === true) { drafts.delete(id); saved++; }
             else errors.push(`${draft.values.title}: ${reply?.error || 'Save was not acknowledged'}`);
           }
         } catch(error) { errors.push('Batch failed: '+error.message); break; }
-      }
-      if (saved) {
-        message(`${saved} saved to Sheets. Refreshing the catalog…`);
-        try { await api('/api/admin/refresh', {}); }
-        catch(error) { errors.push('Edits were saved, but Sheets refresh failed: '+error.message+' Use Sync with Sheets to retry.'); }
       }
       try { await load(); } catch(error) { errors.push('Could not reload local catalog: '+error.message); }
       message(`${saved} of ${entries.length} saved to Sheets. ${drafts.size} unsaved change(s) remain.` + (errors.length ? '\n'+errors.join('\n') : ' Catalog updated.'));
@@ -144,8 +139,7 @@
         const dirty = Object.keys(values).some(key => values[key] !== (song[key] || ''));
         if (dirty) {
           const previous = drafts.get(song.id);
-          const requestId = previous && JSON.stringify(previous.values) === JSON.stringify(values) ? previous.requestId : `${Date.now()}-${Math.random()}`;
-          drafts.set(song.id, {values, song, requestId, original: previous?.original || Object.fromEntries(['title','artist','status','youtube_id','notes'].map(k => [k,song[k] || '']))});
+          drafts.set(song.id, {values, song, original: previous?.original || Object.fromEntries(['title','artist','status','youtube_id','notes'].map(k => [k,song[k] || '']))});
         }
         else drafts.delete(song.id);
         card.className = ((dirty ? 'dirty ' : '') + (reviewState === 'review' ? 'needs-review' : '')).trim();
@@ -166,7 +160,7 @@
       }
       const moderation = document.createElement('td'); moderation.className = 'moderation-cell';
       const decision = document.createElement('select'); decision.setAttribute('aria-label','Moderation for '+song.title);
-      for (const value of ['pending','approved','rejected']) decision.append(new Option(value[0].toUpperCase()+value.slice(1),value));
+      for (const value of ['pending','approved','rejected']) decision.append(new Option(value === 'rejected' ? 'Not approved' : value[0].toUpperCase()+value.slice(1),value));
       decision.value = drafts.get(song.id)?.values.status ?? song.status; decision.onchange = changed; inputs.status = decision;
       decision.setAttribute('form',form.id); moderation.append(decision);
       const noteDetails = document.createElement('details'); noteDetails.className = 'moderator-notes';
@@ -232,12 +226,33 @@
     $('sync-detail').textContent = 'Last catalog sync: ' + (data.last_sync ? new Date(data.last_sync*1000).toLocaleString() : 'Never') + (data.sync_error ? ' ? ' + data.sync_error : '');
     $('stats-updated').textContent = 'Updated ' + new Date().toLocaleTimeString() + ' ? refreshes every 5 seconds';
   }
+  function refreshDownloadRows(data) {
+    // Do not replace a focused editor or interrupt a save. The next poll will
+    // catch up; drafts are retained by render() when rows do need rebuilding.
+    const editing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+    if (busy || editing) return;
+
+    const latest = new Map(data.songs.map(song => [song.id, song]));
+    let changed = false;
+    for (const song of songs) {
+      const update = latest.get(song.id);
+      if (!update) continue;
+      if (song.download_status !== update.download_status || song.cached !== update.cached) {
+        song.download_status = update.download_status;
+        song.cached = update.cached;
+        changed = true;
+      }
+    }
+    // This also reevaluates the Failed downloads filter and Retry buttons.
+    if (changed) render();
+  }
+
   async function refreshStats() {
     const version = ++statsVersion;
     await playbackDiagnostics();
     try {
       const data = await api('/api/admin');
-      if (version === statsVersion) renderStats(data);
+      if (version === statsVersion) { renderStats(data); refreshDownloadRows(data); }
     } catch(error) {
       if (version === statsVersion) $('stats-updated').textContent = 'Statistics refresh failed: ' + error.message + ' Retrying?';
     } finally { setTimeout(refreshStats, 5000); }
